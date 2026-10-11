@@ -559,7 +559,7 @@ local function stopAutoGoal()
 end
 
 -- =========================================================
--- [PATCH] AutoGK: spacebar before tackle, ultra-fast shots, high-ping robust
+-- AutoGK: Space-only jump via VirtualInputManager, ultra-fast shots, high-ping robust
 -- =========================================================
 local autoGkState = { enabled = false, connections = {}, look = nil, pause = false, lastHolder = nil, gui = nil, lastJump = 0, lastTackle = 0, lastSpace = 0, lagBurst = false }
 local function stopAutoGK()
@@ -643,10 +643,9 @@ local function startAutoGK()
         return (t1 > 0 and t1) or (t2 > 0 and t2)
     end
 
-    -- [PATCH] Space helper: fires on high-ball frames + right before tackle
     local function pressSpace(force)
         local now = os.clock()
-        if not force and now - (autoGkState.lastSpace or 0) < 0.03 then return end
+        if not force and now - (autoGkState.lastSpace or 0) < 0.02 then return end
         autoGkState.lastSpace = now
         pcall(function()
             VirtualInputManager:SendKeyEvent(true,  Enum.KeyCode.Space, false, game)
@@ -679,7 +678,6 @@ local function startAutoGK()
         end
         local ball = getBall()
 
-        -- Holder-based tackle: space first, then tackle
         if currentHolder and currentHolder:FindFirstChild("HumanoidRootPart") then
             local hr = currentHolder.HumanoidRootPart
             if autoGkState.look then
@@ -719,7 +717,6 @@ local function startAutoGK()
         end
         lastBallPos = nowPos
 
-        -- fast shots: no smoothing. slow shots: mild smoothing.
         local alpha
         if fastBall then alpha = 1
         elseif midBall then alpha = 0.9
@@ -771,7 +768,6 @@ local function startAutoGK()
 
         local incoming = flatDist <= (fastBall and 95 or (midBall and 80 or 65)) + (laggy and 35 or 0)
 
-        -- jump on high ball + always space right before tackle band
         if incoming and (heightAbove > 1.5 or rising) then
             local bandLow  = veryLaggy and 0.5 or (laggy and 1.0 or 1.5)
             local bandHigh = veryLaggy and 28 or (laggy and 22 or 18)
@@ -779,35 +775,25 @@ local function startAutoGK()
             local ballAboveFeet = ball.Position.Y > hrp.Position.Y - 2
             if inBand and ballAboveFeet then
                 local now2 = os.clock()
-                local hs = hum:GetState()
-                local grounded = hs == Enum.HumanoidStateType.Running
-                    or hs == Enum.HumanoidStateType.RunningNoPhysics
-                    or hs == Enum.HumanoidStateType.Landed
-                    or hs == Enum.HumanoidStateType.Seated
                 local cooldown = fastBall and 0.03 or (midBall and 0.05 or 0.08)
                 local rearm    = fastBall and 0.08 or (midBall and 0.12 or 0.16)
-                local canJump  = grounded or (now2 - (autoGkState.lastJump or 0) > rearm)
-                if canJump and now2 - (autoGkState.lastJump or 0) > cooldown then
-                    if Config.AutoGKJump then pressSpace(true) end
-                    hum.Jump = true
+                if now2 - (autoGkState.lastJump or 0) > cooldown then
                     autoGkState.lastJump = now2
                     task.spawn(function()
-                        local deadline = os.clock() + (fastBall and 0.10 or 0.16)
+                        local deadline = os.clock() + (fastBall and 0.18 or 0.28)
                         repeat
-                            task.wait()
+                            if Config.AutoGKJump then pressSpace(true) end
+                            task.wait(0.02)
                             local s = hum:GetState()
                             if s == Enum.HumanoidStateType.Jumping or s == Enum.HumanoidStateType.Freefall then
                                 return
                             end
-                            hum.Jump = true
-                            if Config.AutoGKJump then pressSpace(false) end
                         until os.clock() > deadline
                     end)
                 end
             end
         end
 
-        -- tackle bands pushed earlier; space fires immediately before every tackle
         local tackleByDist = fastBall and 65 or (midBall and 55 or 45)
         if laggy then tackleByDist = tackleByDist + 25 end
         if veryLaggy then tackleByDist = tackleByDist + 15 end
@@ -886,9 +872,6 @@ local function startAutoGK()
 
     table.insert(autoGkState.connections, hum.Died:Connect(stopAutoGK))
 end
--- =========================================================
--- [END PATCH]
--- =========================================================
 
 local gkMagnetState = { enabled = false, range = 35, conn = nil, lastFire = 0, interval = 0.125 }
 local function stopGKMagnet()
@@ -1046,6 +1029,9 @@ local function checkQTE()
 end
 track(RunService.RenderStepped:Connect(function() pcall(checkQTE) end))
 
+-- =========================================================
+-- Auto-Dribble on Steal: VirtualInputManager E, instantaneous fire
+-- =========================================================
 local stealAnims = {
     "rbxassetid://123994829903056",
     "rbxassetid://73092083880817",
@@ -1060,7 +1046,7 @@ local stealSkill = "tackle"
 local AUTO_DRIBBLE_ON_STEAL = true
 local AUTO_DRIBBLE_RANGE = 20
 local AUTO_DRIBBLE_KEY = Enum.KeyCode.E
-local AUTO_DRIBBLE_COOLDOWN = 0.15
+local AUTO_DRIBBLE_COOLDOWN = 0.0   -- [PATCH] instantaneous; 0 = no throttle
 local lastAutoDribbleTrigger = 0
 
 local function stopSteal()
@@ -1089,14 +1075,17 @@ local function hookStealPlayer(plr)
             if (r.Position - tr.Position).Magnitude > AUTO_DRIBBLE_RANGE then return end
 
             if AUTO_DRIBBLE_ON_STEAL and Config.AutoDribbleOnSteal then
-                local now = tick()
-                if now - lastAutoDribbleTrigger > AUTO_DRIBBLE_COOLDOWN then
+                -- [PATCH] Instant: E via VirtualInputManager, then skill fire, then re-fire.
+                -- No tick() throttle, no wait. All three calls in the same frame.
+                if AUTO_DRIBBLE_COOLDOWN > 0 then
+                    local now = tick()
+                    if now - lastAutoDribbleTrigger < AUTO_DRIBBLE_COOLDOWN then return end
                     lastAutoDribbleTrigger = now
-                    pcall(function()
-                        VirtualInputManager:SendKeyEvent(true,  AUTO_DRIBBLE_KEY, false, game)
-                        VirtualInputManager:SendKeyEvent(false, AUTO_DRIBBLE_KEY, false, game)
-                    end)
                 end
+                pcall(function()
+                    VirtualInputManager:SendKeyEvent(true,  AUTO_DRIBBLE_KEY, false, game)
+                    VirtualInputManager:SendKeyEvent(false, AUTO_DRIBBLE_KEY, false, game)
+                end)
                 pcall(fireBase, {{stealSkill}})
                 pcall(fireBase, {{stealSkill}})
                 return
@@ -1139,7 +1128,7 @@ _G.AzureAutoDribble.key      = AUTO_DRIBBLE_KEY
 _G.AzureAutoDribble.set = function(o)
     o = o or {}
     if o.range then AUTO_DRIBBLE_RANGE = tonumber(o.range) or AUTO_DRIBBLE_RANGE; _G.AzureAutoDribble.range = AUTO_DRIBBLE_RANGE end
-    if o.cooldown then AUTO_DRIBBLE_COOLDOWN = tonumber(o.cooldown) or AUTO_DRIBBLE_COOLDOWN; _G.AzureAutoDribble.cooldown = AUTO_DRIBBLE_COOLDOWN end
+    if o.cooldown then AUTO_DRIBBLE_COOLDOWN = tonumber(o.cooldown) or 0; _G.AzureAutoDribble.cooldown = AUTO_DRIBBLE_COOLDOWN end
     if o.key then AUTO_DRIBBLE_KEY = o.key; _G.AzureAutoDribble.key = AUTO_DRIBBLE_KEY end
     if o.enabled ~= nil then Config.AutoDribbleOnSteal = o.enabled and true or false end
 end
