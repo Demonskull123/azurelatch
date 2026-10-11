@@ -25,7 +25,7 @@ local Persist = {
     AirDribble = false, AutoMove = false, AllDubs = false, AutoKick = false,
     BallESP = false, TeamHighlight = false, Reach = false, AutoTackle = false,
     AutoDribble = false, AutoPass = false, AutoShoot = false, MaxPowerKick = false,
-    AutoQTE = false, TackleWatch = false, TackleWatchMethod = "Move",
+    AutoQTE = false, TackleWatch = false,
 }
 
 local Config = {
@@ -1234,7 +1234,6 @@ local TackleWatch = {
     Range = 8,
     Cooldown = 0.6,
     Last = 0,
-    Method = "Move",
     Conns = {},
     Watching = {},
 }
@@ -1272,18 +1271,7 @@ local function watchPlayerForTackle(plr)
             local now = os.clock()
             if now - TackleWatch.Last < TackleWatch.Cooldown then return end
             TackleWatch.Last = now
-            if TackleWatch.Method == "Key" then
-                pcall(function()
-                    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-                end)
-                task.delay(0.05, function()
-                    pcall(function()
-                        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-                    end)
-                end)
-            else
-                useMove("drib")
-            end
+            useMove("drib")
         end)
         table.insert(TackleWatch.Conns, conn)
     end
@@ -1925,7 +1913,6 @@ local function restoreAll()
     qteEnabled = Persist.AutoQTE
     autoAct.toggle = Persist.AutoMove
     disconnectEnabled = Persist.AutoKick
-    TackleWatch.Method = Persist.TackleWatchMethod or "Move"
     applyReach()
     if Persist.AutoGoal then startAutoGoal() end
     if Persist.GoalFarm then startGoalFarm() end
@@ -1982,10 +1969,6 @@ local function buildUI()
         setTackleWatch(v)
     end)
     bl:Slider("Counter Range", 1, 10, 8, function(v) TackleWatch.Range = v end)
-    bl:Dropdown("Counter Method", { "Move", "Key" }, "Move", function(v)
-        TackleWatch.Method = v
-        Persist.TackleWatchMethod = v
-    end)
     bl:Toggle("Auto Pass", Persist.AutoPass, function(v) Persist.AutoPass = v Config.AutoPass = v end)
     bl:Slider("Pass Power", 29, 95, Config.PassPower, function(v) Config.PassPower = v end)
     bl:Toggle("Steal Ball", Persist.StealBall, function(v) Persist.StealBall = v setSteal(v, "tackle") end)
@@ -2355,9 +2338,7 @@ _G.AzureHubUnload = function()
     setFormless(false)
     setAir(false)
     setTackleWatch(false)
-    TackleWatch.Method = "Move"
     pcall(function() VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
-    pcall(function() VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
     for _, c in CONNS do pcall(function() c:Disconnect() end) end
     table.clear(CONNS)
     cleanTeamHighlight()
