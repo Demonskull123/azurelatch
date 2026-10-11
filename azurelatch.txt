@@ -2,12 +2,6 @@
 --@INCLUDE TeekOps
 --@INCLUDE TeekConfig
 
--- ============================================================
---  Azure Hub - Azure Latch
---  universe 6945584306 / place 94647229517154
---  UI: WindUI (shimmed)
--- ============================================================
-
 if _G.AzureHubUnload then pcall(_G.AzureHubUnload) end
 local HubAlive = true
 
@@ -37,13 +31,9 @@ local Config = {
     TeamHighlight = false, AutoQTE = false, NoCutscene = false,
     BlatantMode = false, MaxPowerKick = false,
     AutoStealBall = false, AutoStealAiku = false, AutoFormless = false, AirDribble = false,
-    AutoPickCF = false, AutoPickGK = false,
     AutoGoal = false, GoalFarm = false,
 }
 
--- ============================================================
---  Load WindUI
--- ============================================================
 local cloneref = cloneref or clonereference or function(i) return i end
 local WindUI
 do
@@ -60,9 +50,6 @@ do
 end
 if not WindUI then error("[AzureHub] WindUI failed to load.") end
 
--- ============================================================
---  Shim: positional calls -> WindUI table API
--- ============================================================
 local function noop() end
 
 local ShimSection = {}
@@ -201,9 +188,6 @@ TeekOps = TeekOps or {
     restore = noop,
 }
 
--- ============================================================
---  Game handles
--- ============================================================
 local packets, wiki
 pcall(function() packets = require(ReplicatedStorage.packets) end)
 pcall(function() wiki    = require(ReplicatedStorage.wiki)    end)
@@ -245,9 +229,6 @@ local function nearest(list, from)
     return best, bd
 end
 
--- ============================================================
---  byteNet legacy path
--- ============================================================
 local buffers = _G.AzureBuffers or {}
 local pick    = _G.AzurePick
 
@@ -287,9 +268,6 @@ local function fireBase(payload)
     pcall(function() ByteNetReliable:FireServer(buffer.fromstring(buffers.base), payload) end)
 end
 
--- ============================================================
---  Shot aimbot
--- ============================================================
 local Aim = { pass = nil, shots = 0, last = "-" }
 local function aimPoint()
     local team = teamOf(myChar())
@@ -355,9 +333,6 @@ local function kickNow()
     return true
 end
 
--- ============================================================
---  Ball reach + heartbeat auto
--- ============================================================
 local REACH0 = wiki and wiki.ball_pickups and { player = wiki.ball_pickups.player, gk = wiki.ball_pickups.gk }
 local function applyReach()
     if not (wiki and wiki.ball_pickups and REACH0) then return end
@@ -426,9 +401,6 @@ track(RunService.Heartbeat:Connect(function()
     end
 end))
 
--- ============================================================
---  ESP + highlight + iframe dots
--- ============================================================
 local espRoot = (gethui and gethui()) or game:GetService("CoreGui")
 local Marks = setmetatable({}, { __mode = "k" })
 local function markFor(ch)
@@ -560,9 +532,6 @@ track(RunService.Heartbeat:Connect(function()
     end
 end))
 
--- ============================================================
---  Shared collision helpers
--- ============================================================
 local function disableCollisions()
     local map = Workspace:FindFirstChild("map")
     if not map then return end
@@ -588,9 +557,6 @@ local function setCollisions(on)
     if bg then bg.CanCollide = on end
 end
 
--- ============================================================
---  Auto Goal
--- ============================================================
 local autoGoalState = { enabled = false, conn = nil }
 local function startAutoGoal()
     if autoGoalState.enabled then return end
@@ -635,9 +601,6 @@ local function stopAutoGoal()
     if autoGoalState.conn then autoGoalState.conn:Disconnect() autoGoalState.conn = nil end
 end
 
--- ============================================================
---  Auto GK (Main)
--- ============================================================
 local autoGkState = { enabled = false, connections = {}, look = nil, pause = false, lastHolder = nil, gui = nil }
 local function stopAutoGK()
     autoGkState.enabled = false
@@ -789,127 +752,32 @@ local function startAutoGK()
     table.insert(autoGkState.connections, LocalPlayer.CharacterAdded:Connect(stopAutoGK))
 end
 
--- ============================================================
---  Auto GK (Alt)
--- ============================================================
-local altGK = { enabled = false, conn = nil, input = nil, gui = nil, align = nil, kind = nil, pause = false, lastHolder = nil, char = nil, hum = nil, hrp = nil }
-local function stopAltGK()
-    altGK.enabled = false
-    if altGK.conn then altGK.conn:Disconnect() altGK.conn = nil end
-    if altGK.input then altGK.input:Disconnect() altGK.input = nil end
-    if altGK.gui then altGK.gui:Destroy() altGK.gui = nil end
-    if altGK.align then altGK.align:Destroy() altGK.align = nil end
-    if altGK.hum then pcall(function() altGK.hum.AutoRotate = true end) end
+local gkMagnetState = { enabled = false, range = 35, conn = nil, lastFire = 0, interval = 0.125 }
+local function stopGKMagnet()
+    gkMagnetState.enabled = false
+    if gkMagnetState.conn then gkMagnetState.conn:Disconnect() gkMagnetState.conn = nil end
 end
-local function startAltGK()
-    if altGK.enabled then return end
-    local char = myChar() or LocalPlayer.CharacterAdded:Wait()
-    local hum = char:WaitForChild("Humanoid")
-    local hrp = char:WaitForChild("HumanoidRootPart")
-    altGK.char, altGK.hum, altGK.hrp = char, hum, hrp
-    altGK.enabled = true
-    altGK.pause = false
-    altGK.kind = nil
-
-    altGK.gui = Instance.new("ScreenGui")
-    altGK.gui.Name = "AutoGKAlt"
-    altGK.gui.ResetOnSpawn = false
-    altGK.gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-    local camB = Instance.new("TextButton")
-    camB.Text = "Camera Mode"
-    camB.Size = UDim2.new(0.159,0,0.109,0)
-    camB.Position = UDim2.new(0.317,0,0.444,0)
-    camB.TextScaled = true
-    camB.Parent = altGK.gui
-    local bodyB = Instance.new("TextButton")
-    bodyB.Text = "Body Mode"
-    bodyB.Size = UDim2.new(0.159,0,0.109,0)
-    bodyB.Position = UDim2.new(0.524,0,0.444,0)
-    bodyB.TextScaled = true
-    bodyB.Parent = altGK.gui
-    local dot = Instance.new("Frame")
-    dot.Size = UDim2.new(0.012,0,0.025,0)
-    dot.Position = UDim2.new(0.988,0,0.975,0)
-    dot.BackgroundColor3 = Color3.fromRGB(0,255,0)
-    dot.BorderSizePixel = 0
-    dot.Parent = altGK.gui
-
-    camB.MouseButton1Up:Connect(function() altGK.kind = "cam" end)
-    bodyB.MouseButton1Up:Connect(function() altGK.kind = "body" end)
-
-    task.spawn(function()
-        local t0 = os.clock()
-        repeat task.wait() until altGK.kind or os.clock() - t0 > 30 or not altGK.enabled
-        if not altGK.kind then stopAltGK() return end
-        camB:Destroy() bodyB:Destroy()
-        if altGK.kind == "body" then
-            hum.AutoRotate = false
-            altGK.align = Instance.new("AlignOrientation")
-            altGK.align.Mode = Enum.OrientationAlignmentMode.OneAttachment
-            altGK.align.Attachment0 = hrp:WaitForChild("RootAttachment")
-            altGK.align.Responsiveness = 300
-            altGK.align.MaxTorque = math.huge
-            altGK.align.Enabled = false
-            altGK.align.Parent = hrp
-        end
-    end)
-
-    local ballHolder = RSW and RSW:FindFirstChild("ballHolder")
-    if ballHolder then
-        altGK.lastHolder = ballHolder.Value
-        ballHolder.Changed:Connect(function()
-            local cur = ballHolder.Value
-            if altGK.lastHolder == altGK.char and cur == nil then
-                altGK.pause = true
-                task.delay(0.7, function() altGK.pause = false end)
-            end
-            altGK.lastHolder = cur
-        end)
-    end
-
-    local cam = Workspace.CurrentCamera
-    local originalCamType = cam.CameraType
-    local originalCamCF = cam.CFrame
-
-    altGK.conn = RunService.RenderStepped:Connect(function()
-        if not altGK.enabled then return end
+local function startGKMagnet()
+    if gkMagnetState.enabled then return end
+    gkMagnetState.enabled = true
+    gkMagnetState.conn = RunService.Heartbeat:Connect(function()
+        if not gkMagnetState.enabled then return end
+        if not HubAlive then return end
+        if not onPitch() then return end
+        local r = myRoot()
+        if not r then return end
         local ball = Workspace.Terrain:FindFirstChild("Ball")
-        if not ball or not onPitch() or altGK.pause then
-            if altGK.align then altGK.align.Enabled = false end
-            return
-        end
-        if altGK.kind == "cam" then
-            cam.CameraType = Enum.CameraType.Scriptable
-            cam.CFrame = CFrame.lookAt(cam.CFrame.Position, ball.Position)
-        elseif altGK.kind == "body" and altGK.align then
-            altGK.align.Enabled = true
-            local dir = ball.Position - altGK.hrp.Position
-            dir = Vector3.new(dir.X, 0, dir.Z)
-            if dir.Magnitude > 0.01 then
-                altGK.align.CFrame = CFrame.lookAt(Vector3.zero, dir)
+        if not ball then return end
+        if (r.Position - ball.Position).Magnitude <= gkMagnetState.range then
+            local now = os.clock()
+            if now - gkMagnetState.lastFire >= gkMagnetState.interval then
+                gkMagnetState.lastFire = now
+                fireRaw(buffers.grabball)
             end
-        end
-        local dist = (altGK.hrp.Position - ball.Position).Magnitude
-        if dist <= 60 then
-            if ball.Position.Y >= altGK.hrp.Position.Y + 6 then altGK.hum.Jump = true
-            else altGK.hum.Jump = false end
-            fireBase({{"tackle"}})
-        end
-    end)
-
-    altGK.input = UserInputService.InputBegan:Connect(function(input, gp)
-        if gp then return end
-        if input.KeyCode == Enum.KeyCode.F4 then
-            cam.CameraType = originalCamType
-            cam.CFrame = originalCamCF
-            stopAltGK()
         end
     end)
 end
 
--- ============================================================
---  GK Anywhere
--- ============================================================
 local gkAnywhereHooked = false
 local function gkAnywhere()
     if gkAnywhereHooked then return end
@@ -924,30 +792,6 @@ local function gkAnywhere()
     end
 end
 
--- ============================================================
---  Pick GK / CF
--- ============================================================
-local function firePick(role, side)
-    if not (pick and side) then return end
-    fireRaw(pick .. role .. "\001\000" .. side)
-end
-local function pickGKFn()
-    firePick("\005\001", "B")
-    firePick("\005\001", "A")
-end
-local function pickCFFn()
-    local r = myRoot()
-    if not r then return end
-    if (r.Position - Vector3.new(-371,13,-1599)).Magnitude <= 15 or
-       (r.Position - Vector3.new(-196,13,-1599)).Magnitude <= 15 then
-        firePick("\001\001", "A")
-        firePick("\001\001", "B")
-    end
-end
-
--- ============================================================
---  No Goal Walls
--- ============================================================
 local blatantConn
 local function startBlatant()
     if blatantConn then return end
@@ -958,9 +802,6 @@ local function stopBlatant()
     setCollisions(true)
 end
 
--- ============================================================
---  Max Power Kick
--- ============================================================
 local kickHard = false
 local kickHookInstalled = false
 local function installKickHook()
@@ -1003,9 +844,6 @@ local function installKickHook()
     if not ok then kickHookInstalled = false end
 end
 
--- ============================================================
---  Break Ball
--- ============================================================
 local function breakBallPlayer()
     local base = Vector3.new(-190, 14864566, 492)
     local size = Vector3.new(10, 1, 10)
@@ -1041,9 +879,6 @@ local function permBreakBall()
     end
 end
 
--- ============================================================
---  Auto QTE
--- ============================================================
 local qteEnabled = false
 local function isShadeOfGreen(c) return c.G > c.R and c.G > c.B end
 local function checkQTE()
@@ -1073,9 +908,6 @@ local function checkQTE()
 end
 track(RunService.RenderStepped:Connect(function() pcall(checkQTE) end))
 
--- ============================================================
---  Steal Ball
--- ============================================================
 local stealAnims = {
     "rbxassetid://123994829903056",
     "rbxassetid://73092083880817",
@@ -1140,9 +972,6 @@ local function setSteal(enabled, skill)
     if enabled then startSteal() else stealEnabled = false stopSteal() end
 end
 
--- ============================================================
---  Auto Formless
--- ============================================================
 local formlessBind = Enum.KeyCode.Y
 local formlessConn
 local function formlessTrigger()
@@ -1184,9 +1013,6 @@ local function setFormless(on)
     end)
 end
 
--- ============================================================
---  Air Dribble
--- ============================================================
 local airBind = Enum.KeyCode.LeftAlt
 local airEnabled = false
 local airHolding = false
@@ -1231,9 +1057,6 @@ track(UserInputService.InputEnded:Connect(function(input)
     end
 end))
 
--- ============================================================
---  Move Buffs
--- ============================================================
 local DashConfigs = {
     Tackle = { animId = "rbxassetid://109744655458082", sliderVar = "tackleDist", duration = 0.4, wait = 0 },
     Rush = { animId = "rbxassetid://79394729551302", sliderVar = "rushDist", duration = 0.4, wait = 0.15 },
@@ -1293,23 +1116,26 @@ local function updateDashes(dt)
     for i = #ActiveDashes, 1, -1 do
         local dash = ActiveDashes[i]
         local hrp = dash.hrp
-        if not hrp or not hrp.Parent then table.remove(ActiveDashes, i) continue end
-        local step = dash.cfg.isUnlimited and (dash.speed * dt) or math.min(dash.speed * dt, dash.remaining)
-        local moveDir
-        if dash.isDirectional then
-            local baseLook = hrp.CFrame.LookVector
-            local right = baseLook:Cross(Vector3.new(0,1,0))
-            local offset = dash.offset
-            moveDir = (right * -offset.X + baseLook * offset.Z).Unit
+        if not hrp or not hrp.Parent then
+            table.remove(ActiveDashes, i)
         else
-            local look = hrp.CFrame.LookVector
-            moveDir = Vector3.new(look.X, 0, look.Z).Unit
-            if moveDir.Magnitude < 0.01 then moveDir = DEFAULT_DIR end
+            local step = dash.cfg.isUnlimited and (dash.speed * dt) or math.min(dash.speed * dt, dash.remaining)
+            local moveDir
+            if dash.isDirectional then
+                local baseLook = hrp.CFrame.LookVector
+                local right = baseLook:Cross(Vector3.new(0,1,0))
+                local offset = dash.offset
+                moveDir = (right * -offset.X + baseLook * offset.Z).Unit
+            else
+                local look = hrp.CFrame.LookVector
+                moveDir = Vector3.new(look.X, 0, look.Z).Unit
+                if moveDir.Magnitude < 0.01 then moveDir = DEFAULT_DIR end
+            end
+            local newPos = hrp.Position + moveDir * step
+            hrp.CFrame = CFrame.new(newPos.X, hrp.Position.Y, newPos.Z) * CFrame.new(ZERO, moveDir)
+            dash.remaining = dash.remaining - step
+            if dash.remaining <= 0 then table.remove(ActiveDashes, i) end
         end
-        local newPos = hrp.Position + moveDir * step
-        hrp.CFrame = CFrame.new(newPos.X, hrp.Position.Y, newPos.Z) * CFrame.new(ZERO, moveDir)
-        dash.remaining = dash.remaining - step
-        if dash.remaining <= 0 then table.remove(ActiveDashes, i) end
     end
     if #ActiveDashes == 0 and renderConn then renderConn:Disconnect() renderConn = nil end
 end
@@ -1358,9 +1184,13 @@ local function onAnimPlayed(trackAnim)
         if match and dashHRP and dashHRP.Parent then
             if cfg.requiresBall then
                 local ball = dashHRP.Parent:FindFirstChild("Ball")
-                if not ball or not ball:IsA("MeshPart") then continue end
+                if not ball or not ball:IsA("MeshPart") then
+                    match = false
+                end
             end
-            startDash(dashHRP, cfg, trackAnim, dirName)
+            if match then
+                startDash(dashHRP, cfg, trackAnim, dirName)
+            end
         end
     end
 end
@@ -1376,9 +1206,6 @@ end
 if LocalPlayer.Character then setupDashChar(LocalPlayer.Character) end
 track(LocalPlayer.CharacterAdded:Connect(setupDashChar))
 
--- ============================================================
---  Auto Move
--- ============================================================
 local autoAct = { distance = 10, toggle = false, move = 1, holdReleased = true, mode = "Hold", minHeight = 0 }
 local autoActGui
 track(UserInputService.InputBegan:Connect(function(input, gp)
@@ -1424,9 +1251,6 @@ track(RunService.RenderStepped:Connect(function()
     end
 end))
 
--- ============================================================
---  Line Ups
--- ============================================================
 local lineUpPads, lineUpTargets = {}, {}
 local holdingRMB = false
 local camLockConn
@@ -1732,9 +1556,6 @@ local function loadLineupCodes(text)
     StarterGui:SetCore("SendNotification", { Title = "Lines Loaded", Text = tostring(i) .. " created.", Duration = 5 })
 end
 
--- ============================================================
---  Goal Farm
--- ============================================================
 local goalFarm = { enabled = false, mode = "Solo Farm", stopAt = nil, conn = nil, cfConn = nil, lastTeam = "B", switching = false, lastReset = 0 }
 local function checkScoreCondition()
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
@@ -1847,9 +1668,6 @@ local function stopGoalFarm()
     if goalFarm.cfConn then goalFarm.cfConn:Disconnect() goalFarm.cfConn = nil end
 end
 
--- ============================================================
---  Instant Disconnect
--- ============================================================
 local disconnectLimit, disconnectEnabled = nil, false
 track(RunService.RenderStepped:Connect(function()
     if disconnectEnabled and disconnectLimit and #Players:GetPlayers() > disconnectLimit then
@@ -1857,9 +1675,6 @@ track(RunService.RenderStepped:Connect(function()
     end
 end))
 
--- ============================================================
---  Emotes
--- ============================================================
 local function playEmote(animId, soundId, soundProps, loop)
     local char = myChar()
     if not char then return end
@@ -1892,13 +1707,9 @@ local function stopEmote()
     if s then s:Stop() s:Destroy() end
 end
 
--- ============================================================
---  UI
--- ============================================================
 local function buildUI()
     local UI = TeekUI.new({ Title = "Azure Hub", Subtitle = "AZURE LATCH", Version = "v1" })
 
-    -- Shooting
     local sh = UI:Tab("Shooting")
     sh:Section("Shot Aimbot")
     sh:Toggle("Shot Aimbot", Config.Aimbot, function(v) Config.Aimbot = v end)
@@ -1914,7 +1725,6 @@ local function buildUI()
     sh:Section("Session")
     local sShots = sh:Stat("Aimed Shots", "0")
 
-    -- Ball
     local bl = UI:Tab("Ball")
     bl:Section("Ball")
     bl:Toggle("Ball Reach", Config.Reach, function(v) Config.Reach = v end)
@@ -1945,31 +1755,21 @@ local function buildUI()
         end
     end)
 
-    -- Goalkeeper
     local gk = UI:Tab("Goalkeeper")
     gk:Section("Auto GK")
     gk:Button("Auto GK (Main)", "Toggle on. Reset to disable.", function() startAutoGK() end)
-    gk:Button("Auto GK (Alt)", "Pick mode. F4 or reset to disable.", function() startAltGK() end)
     gk:Button("GK Anywhere", "hookfunction checkGK. Rejoin to disable.", gkAnywhere)
-    gk:Button("GK Catch", "Remote loadstring.", function()
-        pcall(function() loadstring(game:HttpGet("https://pastebin.com/raw/Hr1HnK38"))() end)
-    end)
-    gk:Section("Position")
-    gk:Toggle("Pick GK", Config.AutoPickGK, function(v)
-        Config.AutoPickGK = v
-        if v then pickGKFn() end
-    end)
-    gk:Toggle("Pick CF", Config.AutoPickCF, function(v)
-        Config.AutoPickCF = v
-        if v then pickCFFn() end
-    end)
     gk:Section("Collision")
     gk:Toggle("No Goal Walls", Config.BlatantMode, function(v)
         Config.BlatantMode = v
         if v then startBlatant() else stopBlatant() end
     end)
+    gk:Section("Magnet")
+    gk:Toggle("GK Magnet", "Pulls the ball when it's near you.", function(v)
+        if v then startGKMagnet() else stopGKMagnet() end
+    end)
+    gk:Slider("GK Magnet Range", 5, 60, 35, function(v) gkMagnetState.range = v end)
 
-    -- Visuals
     local vs = UI:Tab("Visuals")
     vs:Section("ESP")
     vs:Toggle("Iframe Text", Config.IframeESP, function(v) Config.IframeESP = v end)
@@ -1977,7 +1777,6 @@ local function buildUI()
     vs:Toggle("Ball ESP", Config.BallESP, function(v) Config.BallESP = v end)
     vs:Toggle("Team Highlight", Config.TeamHighlight, function(v) Config.TeamHighlight = v applyTeamHighlight() end)
 
-    -- Blatant
     local bt = UI:Tab("Blatant")
     bt:Section("Kick")
     bt:Toggle("Max Power Kick", Config.MaxPowerKick, function(v)
@@ -2000,7 +1799,6 @@ local function buildUI()
         if ok and kc then airBind = kc end
     end)
 
-    -- Move Buffs
     local bf = UI:Tab("Move Buffs")
     bf:Section("Basics")
     bf:Slider("Tackle", 0, 75, 0, function(v) Distances.tackleDist = v end)
@@ -2043,7 +1841,6 @@ local function buildUI()
         bf:Slider(entry[1], 0, entry[3], 0, function(v) Distances[entry[2]] = v end)
     end
 
-    -- Auto
     local au = UI:Tab("Auto")
     au:Section("Auto Move")
     au:Toggle("Auto Move", "Fires a skill when ball is close.", function(v) autoAct.toggle = v end)
@@ -2068,7 +1865,6 @@ local function buildUI()
     au:Button("Copy Line", "Copy a lineup from your current position.", copyLineupCode)
     au:Textbox("Load Line", "Paste one or more codes.", function(t) loadLineupCodes(t) end)
 
-    -- Misc
     local ms = UI:Tab("Misc")
     ms:Section("Codes")
     ms:Button("Redeem Codes", true, function() task.spawn(function()
@@ -2249,14 +2045,12 @@ local function buildUI()
         btn.Activated:Connect(function() pcall(airKick) end)
     end)
 
-    -- Teleports
     local tp = UI:Tab("Teleports")
     tp:Button("Midfield", function() local r = myRoot() if r then r.CFrame = CFrame.new(-540, 3, 1274) end end)
     tp:Button("Commentator", function() local r = myRoot() if r then r.CFrame = CFrame.new(-6, 2, 3237) end end)
     tp:Button("Goal A", function() local r = myRoot() if r then r.CFrame = CFrame.new(-537, 3, 1575) end end)
     tp:Button("Goal B", function() local r = myRoot() if r then r.CFrame = CFrame.new(-534, 3, 974) end end)
 
-    -- Hub
     local hb = UI:Tab("Hub")
     hb:Button("Unload", false, function()
         task.delay(0.3, function() if _G.AzureHubUnload then pcall(_G.AzureHubUnload) end end)
@@ -2294,6 +2088,7 @@ pcall(function() getgenv().AzureDebug = {
     Config = Config, Aim = Aim, Auto = Auto, client = client, aimPoint = aimPoint,
     kickNow = kickNow, buffers = buffers, pick = pick, Distances = Distances,
     goalFarm = goalFarm, autoGkState = autoGkState, shotPowerValue = shotPowerValue,
+    gkMagnetState = gkMagnetState,
 } end)
 
 print("[AzureHub] Azure Latch loaded")
@@ -2305,7 +2100,7 @@ _G.AzureHubUnload = function()
     applyReach()
     stopAutoGoal()
     stopAutoGK()
-    stopAltGK()
+    stopGKMagnet()
     stopBlatant()
     stopSteal()
     stopGoalFarm()
