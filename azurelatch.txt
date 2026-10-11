@@ -1,0 +1,2325 @@
+--@INCLUDE WindUI
+--@INCLUDE TeekOps
+--@INCLUDE TeekConfig
+
+-- ============================================================
+--  Azure Hub - Azure Latch
+--  universe 6945584306 / place 94647229517154
+--  UI: WindUI (shimmed)
+-- ============================================================
+
+if _G.AzureHubUnload then pcall(_G.AzureHubUnload) end
+local HubAlive = true
+
+local Players             = game:GetService("Players")
+local RunService          = game:GetService("RunService")
+local ReplicatedStorage   = game:GetService("ReplicatedStorage")
+local Workspace           = game:GetService("Workspace")
+local StarterGui          = game:GetService("StarterGui")
+local UserInputService    = game:GetService("UserInputService")
+local SoundService        = game:GetService("SoundService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local TeleportService     = game:GetService("TeleportService")
+local LocalPlayer         = Players.LocalPlayer
+
+local CONNS = {}
+local function track(c) if c then table.insert(CONNS, c) end return c end
+
+local Config = {
+    Aimbot = true, AimSpot = "Away From Keeper", AimHeight = 12, FullPower = true, NoCurve = true,
+    Reach = false, ReachSize = 25,
+    Magnet = false, MagnetRange = 30,
+    AutoTackle = false, TackleRange = 9,
+    AutoDribble = false, DribbleRange = 10,
+    AutoPass = false, PassPower = 55,
+    AutoShoot = false, ShootRange = 70,
+    IframeESP = true, IframeDotESP = false, BallESP = false,
+    TeamHighlight = false, AutoQTE = false, NoCutscene = false,
+    BlatantMode = false, MaxPowerKick = false,
+    AutoStealBall = false, AutoStealAiku = false, AutoFormless = false, AirDribble = false,
+    AutoPickCF = false, AutoPickGK = false,
+    AutoGoal = false, GoalFarm = false,
+}
+
+-- ============================================================
+--  Load WindUI
+-- ============================================================
+local cloneref = cloneref or clonereference or function(i) return i end
+local WindUI
+do
+    local ok, result = pcall(function() return require("./src/Init") end)
+    if ok then
+        WindUI = result
+    else
+        if cloneref(game:GetService("RunService")):IsStudio() then
+            WindUI = require(cloneref(ReplicatedStorage:WaitForChild("WindUI"):WaitForChild("Init")))
+        else
+            WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
+        end
+    end
+end
+if not WindUI then error("[AzureHub] WindUI failed to load.") end
+
+-- ============================================================
+--  Shim: positional TeekUI-style calls -> WindUI table API
+-- ============================================================
+local function noop() end
+
+local ShimSection = {}
+ShimSection.__index = ShimSection
+function ShimSection.new(parent) return setmetatable({ _p = parent }, ShimSection) end
+function ShimSection:Section(name)
+    if self._p.Section then pcall(self._p.Section, self._p, { Title = name, Box = true, BoxBorder = true, Opened = true }) end
+    return self
+end
+function ShimSection:Label(text)
+    if self._p.Section then pcall(self._p.Section, self._p, { Title = tostring(text), TextSize = 14 }) end
+    return self
+end
+function ShimSection:Toggle(name, default, cb)
+    local created
+    if self._p.Toggle then
+        created = self._p:Toggle({ Title = name, Value = default and true or false, Callback = cb or noop })
+    end
+    return created or self
+end
+function ShimSection:Slider(name, min, max, default, cb, suffix)
+    if self._p.Slider then
+        self._p:Slider({ Title = name, Step = 1, Value = { Min = min, Max = max, Default = default }, Callback = cb or noop })
+    end
+    return self
+end
+function ShimSection:Dropdown(name, list, default, cb)
+    if self._p.Dropdown then
+        self._p:Dropdown({ Title = name, Values = list, Value = default, Callback = cb or noop })
+    end
+    return self
+end
+function ShimSection:Button(name, arg2, arg3)
+    local cb = arg3 or arg2
+    if type(arg2) == "function" then cb = arg2 end
+    if self._p.Button then
+        self._p:Button({ Title = name, Justify = "Center", Callback = cb or noop })
+    end
+    return self
+end
+function ShimSection:Textbox(name, placeholder, cb)
+    if self._p.Input then
+        self._p:Input({ Title = name, Placeholder = placeholder, Value = "", Callback = cb or noop })
+    end
+    return self
+end
+function ShimSection:Stat(name, default)
+    local value = default or "0"
+    local obj = {}
+    if self._p.Section then
+        local lbl = self._p:Section({ Title = name .. ": " .. value, TextSize = 14 })
+        function obj.Set(v)
+            value = tostring(v)
+            if lbl and lbl.SetTitle then pcall(lbl.SetTitle, lbl, name .. ": " .. value) end
+        end
+    else
+        function obj.Set(v) value = tostring(v) end
+    end
+    return obj
+end
+
+local ShimTab = {}
+ShimTab.__index = ShimTab
+function ShimTab.new(parent) return setmetatable({ _p = parent }, ShimTab) end
+function ShimTab:Section(name)
+    local child
+    if self._p.Section then child = self._p:Section({ Title = name, Box = true, BoxBorder = true, Opened = true })
+    else child = self._p end
+    return ShimSection.new(child or self._p)
+end
+function ShimTab:Label(t) return ShimSection.new(self._p):Label(t) end
+function ShimTab:Toggle(n, d, cb) return ShimSection.new(self._p):Toggle(n, d, cb) end
+function ShimTab:Slider(n, a, b, c, cb, s) return ShimSection.new(self._p):Slider(n, a, b, c, cb, s) end
+function ShimTab:Dropdown(n, l, d, cb) return ShimSection.new(self._p):Dropdown(n, l, d, cb) end
+function ShimTab:Button(n, a, b) return ShimSection.new(self._p):Button(n, a, b) end
+function ShimTab:Textbox(n, p, cb) return ShimSection.new(self._p):Textbox(n, p, cb) end
+function ShimTab:Stat(n, d) return ShimSection.new(self._p):Stat(n, d) end
+
+local TeekUI = {}
+TeekUI.__index = TeekUI
+
+function TeekUI.new(opts)
+    local window = WindUI:CreateWindow({
+        Title = opts.Title or "Azure Hub",
+        Folder = "azurehub",
+        Icon = "bird",
+        NewElements = true,
+        OpenButton = {
+            Title = "Open Azure Hub",
+            CornerRadius = UDim.new(1, 0),
+            StrokeThickness = 3,
+            Enabled = true,
+            Draggable = true,
+            OnlyMobile = false,
+            Scale = 0.5,
+        },
+        Topbar = { Height = 44, ButtonsType = "Mac" },
+    })
+    return setmetatable({ _w = window, _tabs = {} }, TeekUI)
+end
+
+function TeekUI:Tab(name, kind)
+    local child = self._w:Tab({ Title = name, Icon = "bird" })
+    local t = ShimTab.new(child)
+    self._tabs[name] = t
+    return t
+end
+
+function TeekUI:Notify(text, kind, duration)
+    pcall(function()
+        WindUI:Notify({ Title = "Azure Hub", Content = tostring(text), Duration = duration or 3 })
+    end)
+end
+
+function TeekUI:mountInterface(tab, theme) return tab end
+function TeekUI:Boot(lines)
+    pcall(function()
+        WindUI:Notify({ Title = "Azure Hub", Content = "Loaded.", Duration = 3 })
+    end)
+end
+function TeekUI:Destroy()
+    if self._w and self._w.Destroy then pcall(self._w.Destroy, self._w) end
+end
+
+TeekConfig = TeekConfig or {
+    Theme = nil,
+    init = noop, register = noop, autoload = noop,
+    enableAutosave = noop, restore = noop, stopAutosave = noop,
+    applyTheme = noop, mountUI = function(tab) return tab end,
+}
+TeekOps = TeekOps or {
+    RISK = { CLIENT = "client" },
+    Persist = {},
+    check = noop,
+    mountUI = function(tab) return tab end,
+    restore = noop,
+}
+
+-- ============================================================
+--  Game handles
+-- ============================================================
+local packets, wiki
+pcall(function() packets = require(ReplicatedStorage.packets) end)
+pcall(function() wiki    = require(ReplicatedStorage.wiki)    end)
+local RSW = ReplicatedStorage:FindFirstChild("workspace")
+
+local function myChar() return LocalPlayer.Character end
+local function myRoot() local c = myChar() return c and c:FindFirstChild("HumanoidRootPart") end
+local function teamOf(ch) local s = ch and ch:FindFirstChild("state") return s and s:FindFirstChild("team") and s.team.Value or nil end
+local function holder() return RSW and RSW:FindFirstChild("ballHolder") and RSW.ballHolder.Value end
+local function iHaveBall() return holder() ~= nil and holder() == myChar() end
+local function looseBall() local c = ReplicatedStorage:FindFirstChild("CFBall") return c and c.Value.Position end
+local function onPitch() local t = teamOf(myChar()) return t == "A" or t == "B" end
+
+local Client
+local function client()
+    if Client and Client.character == myChar() then return Client end
+    Client = nil
+    pcall(function() Client = filtergc("table", { Keys = { "cooldowntable", "kickactived", "moveactived" } }, true) end)
+    return Client
+end
+local function useMove(name) local b = client() if b then pcall(b.use, b, name) return true end end
+
+local function playersOnPitch(wantEnemy)
+    local me, out = myChar(), {}
+    local mine = teamOf(me)
+    local chars = Workspace:FindFirstChild("characters")
+    for _, ch in ipairs(chars and chars:GetChildren() or {}) do
+        local t = teamOf(ch)
+        local r = ch:FindFirstChild("HumanoidRootPart")
+        if ch ~= me and r and (t == "A" or t == "B") and ((t ~= mine) == wantEnemy) then out[#out + 1] = ch end
+    end
+    return out
+end
+local function nearest(list, from)
+    local best, bd
+    for _, ch in ipairs(list) do
+        local d = (ch.HumanoidRootPart.Position - from).Magnitude
+        if not bd or d < bd then best, bd = ch, d end
+    end
+    return best, bd
+end
+
+-- ============================================================
+--  byteNet legacy path
+-- ============================================================
+local buffers = _G.AzureBuffers or {}
+local pick    = _G.AzurePick
+
+if not next(buffers) then
+    local ok = pcall(function()
+        loadstring(game:HttpGet("https://pastebin.com/raw/8XJh7dzh"))()
+    end)
+    if ok then
+        local t0 = os.clock()
+        repeat task.wait() until game.Lighting:FindFirstChild("BUFFERSTRINGS") or os.clock() - t0 > 8
+        local folder = game.Lighting:FindFirstChild("BUFFERSTRINGS")
+        if folder then
+            for _, v in ipairs(folder:GetChildren()) do buffers[v.Name] = v.Value end
+            folder:Destroy()
+        end
+    end
+    _G.AzureBuffers = buffers
+end
+
+if not pick then
+    local ok, role = pcall(function()
+        return ReplicatedStorage:WaitForChild("BytenetStorage"):WaitForChild("Networking").Value
+            :match('"bytenet_selectRole"%s*:%s*(%d+)')
+    end)
+    if ok and role then pick = string.char(tonumber(role)) end
+    _G.AzurePick = pick
+end
+
+local ByteNetReliable = ReplicatedStorage:WaitForChild("ByteNetReliable", 10)
+
+local function fireRaw(bufStr)
+    if not (ByteNetReliable and bufStr) then return end
+    pcall(function() ByteNetReliable:FireServer(buffer.fromstring(bufStr)) end)
+end
+local function fireBase(payload)
+    if not (ByteNetReliable and buffers.base and payload) then return end
+    pcall(function() ByteNetReliable:FireServer(buffer.fromstring(buffers.base), payload) end)
+end
+
+-- ============================================================
+--  Shot aimbot
+-- ============================================================
+local Aim = { pass = nil, shots = 0, last = "-" }
+local function aimPoint()
+    local team = teamOf(myChar())
+    local goal = Workspace.map:FindFirstChild(team == "A" and "Bgoal" or "Agoal")
+    if not goal then return end
+    local gk = Workspace:FindFirstChild("gks") and Workspace.gks:FindFirstChild(team == "A" and "B" or "A")
+    local gr = gk and gk:FindFirstChild("HumanoidRootPart")
+    local half = goal.Size.X / 2 - 9
+    local side = 0
+    if Config.AimSpot == "Left Corner" then side = -1
+    elseif Config.AimSpot == "Right Corner" then side = 1
+    elseif Config.AimSpot == "Away From Keeper" then side = (gr and gr.Position.X > goal.Position.X) and -1 or 1 end
+    return goal.Position + Vector3.new(side * half, 0, 0)
+end
+local function rewriteKick(a)
+    local r = myRoot()
+    if not r then return end
+    if Aim.pass and os.clock() - Aim.pass.at < 1 and Aim.pass.char.Parent then
+        local to = Aim.pass.char.HumanoidRootPart.Position - r.Position
+        a[2] = Config.PassPower
+        a[3] = false
+        a[4] = Vector3.new(to.X, to.Magnitude * 0.04, to.Z).Unit
+        Aim.pass = nil
+        Aim.last = "pass"
+        return
+    end
+    if not Config.Aimbot then return end
+    local tp = aimPoint()
+    if not tp then return end
+    local flat = Vector3.new(tp.X - r.Position.X, 0, tp.Z - r.Position.Z).Unit
+    a[4] = Vector3.new(flat.X, (tonumber(Config.AimHeight) or 12) / 100, flat.Z).Unit
+    if Config.FullPower then a[2] = 95 end
+    if Config.NoCurve then a[3] = false end
+    Aim.shots += 1
+    Aim.last = Config.AimSpot
+end
+local useSend
+if packets and packets.bytenet_use then
+    useSend = packets.bytenet_use.send
+    packets.bytenet_use.send = function(a, ...)
+        if HubAlive and type(a) == "table" and a[1] == "kick" then pcall(rewriteKick, a) end
+        return useSend(a, ...)
+    end
+end
+
+local function kickNow()
+    local b = client()
+    if not b or b.kickactived or b.moveactived then return false end
+    task.spawn(pcall, b.use, b, "kick")
+    task.delay(0.12, function()
+        b.moveactived = true
+        task.wait()
+        b.moveactived = false
+    end)
+    return true
+end
+
+-- ============================================================
+--  Ball reach + heartbeat auto
+-- ============================================================
+local REACH0 = wiki and wiki.ball_pickups and { player = wiki.ball_pickups.player, gk = wiki.ball_pickups.gk }
+local function applyReach()
+    if not (wiki and wiki.ball_pickups and REACH0) then return end
+    local cap = tonumber(wiki.ball_pickups.max) or 25
+    if Config.Reach and HubAlive then
+        local v = math.clamp(tonumber(Config.ReachSize) or 25, REACH0.player, cap)
+        wiki.ball_pickups.player = v
+        wiki.ball_pickups.gk = math.max(v, REACH0.gk)
+    else
+        wiki.ball_pickups.player, wiki.ball_pickups.gk = REACH0.player, REACH0.gk
+    end
+end
+
+local Auto = { tackleAt = 0, dribAt = 0, passAt = 0, magnetAt = 0, shootAt = 0, gap = setmetatable({}, { __mode = "k" }) }
+track(RunService.Heartbeat:Connect(function()
+    if not HubAlive then return end
+    applyReach()
+    local r = myRoot()
+    if not (r and onPitch()) then return end
+    local now = os.clock()
+    local mine = iHaveBall()
+
+    if Config.Magnet and not holder() and now - Auto.magnetAt > 0.25 then
+        local b = looseBall()
+        if b and (b - r.Position).Magnitude <= Config.MagnetRange and (b - r.Position).Magnitude > 3 then
+            Auto.magnetAt = now
+            r.CFrame = CFrame.new(b + Vector3.new(0, r.Position.Y - b.Y, 0)) * (r.CFrame - r.Position)
+        end
+    end
+
+    if mine and Config.AutoShoot and now - Auto.shootAt > 1.5 then
+        local tp = aimPoint()
+        if tp and (tp - r.Position).Magnitude <= Config.ShootRange then
+            Auto.shootAt = now
+            if kickNow() then return end
+        end
+    end
+
+    if mine then
+        local foe, fd = nearest(playersOnPitch(true), r.Position)
+        local closing = 0
+        if foe then
+            local prev = Auto.gap[foe]
+            if prev and now > prev.t then closing = (prev.d - fd) / (now - prev.t) end
+            Auto.gap[foe] = { d = fd, t = now }
+        end
+        local coming = foe and (foe:GetAttribute("Tackling") == true or closing > 14 or fd <= 4)
+        if foe and coming then
+            if Config.AutoPass and fd <= Config.DribbleRange + 4 and now - Auto.passAt > 1.5 then
+                local mate = nearest(playersOnPitch(false), r.Position)
+                if mate then
+                    Auto.passAt = now
+                    Aim.pass = { char = mate, at = now }
+                    kickNow()
+                    return
+                end
+            end
+            if Config.AutoDribble and fd <= Config.DribbleRange and now - Auto.dribAt > 0.6 then
+                Auto.dribAt = now
+                useMove("drib")
+            end
+        end
+    elseif Config.AutoTackle and now - Auto.tackleAt > 0.8 then
+        local h = holder()
+        if h and h.Parent and teamOf(h) ~= teamOf(myChar()) and (teamOf(h) == "A" or teamOf(h) == "B") then
+            local hr = h:FindFirstChild("HumanoidRootPart")
+            if hr and (hr.Position - r.Position).Magnitude <= Config.TackleRange then
+                Auto.tackleAt = now
+                local flat = Vector3.new(hr.Position.X, r.Position.Y, hr.Position.Z)
+                r.CFrame = CFrame.lookAt(r.Position, flat)
+                useMove("dash")
+            end
+        end
+    end
+end))
+
+-- ============================================================
+--  ESP + highlight + iframe dots
+-- ============================================================
+local espRoot = (gethui and gethui()) or game:GetService("CoreGui")
+local Marks = setmetatable({}, { __mode = "k" })
+local function markFor(ch)
+    local m = Marks[ch]
+    if m and m.Parent then return m end
+    m = Instance.new("BillboardGui")
+    m.Name = "IframeText"
+    m.AlwaysOnTop = true
+    m.Size = UDim2.fromOffset(90, 22)
+    m.StudsOffset = Vector3.new(0, 3.2, 0)
+    m.Enabled = false
+    local t = Instance.new("TextLabel")
+    t.Size = UDim2.fromScale(1, 1)
+    t.BackgroundTransparency = 1
+    t.Font = Enum.Font.GothamBold
+    t.TextSize = 14
+    t.Text = "IFRAME"
+    t.TextColor3 = Color3.fromRGB(120, 200, 255)
+    t.TextStrokeTransparency = 0.3
+    t.Parent = m
+    m.Adornee = ch:FindFirstChild("Head") or ch:FindFirstChild("HumanoidRootPart")
+    m.Parent = espRoot
+    Marks[ch] = m
+    return m
+end
+
+local function ballPart()
+    local h = holder()
+    if h then return h:FindFirstChild("Ball") end
+    return Workspace.Terrain:FindFirstChild("Ball")
+end
+local ballMark
+
+local iframeDots = {}
+local teamHighlightFolder = nil
+
+local function cleanTeamHighlight()
+    if teamHighlightFolder then teamHighlightFolder:Destroy() teamHighlightFolder = nil end
+end
+local function applyTeamHighlight()
+    cleanTeamHighlight()
+    if not Config.TeamHighlight then return end
+    teamHighlightFolder = Instance.new("Folder")
+    teamHighlightFolder.Name = "TeamHL"
+    teamHighlightFolder.Parent = espRoot
+    local me = LocalPlayer
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= me and p.Character then
+            local col = (p.Team == me.Team) and Color3.fromRGB(0,150,255) or Color3.fromRGB(255,50,50)
+            local hl = Instance.new("Highlight")
+            hl.Name = p.Name .. "_HL"
+            hl.FillColor = col
+            hl.FillTransparency = 0.65
+            hl.OutlineColor = col
+            hl.OutlineTransparency = 0.2
+            hl.Adornee = p.Character
+            hl.Parent = teamHighlightFolder
+        end
+    end
+end
+
+local function clearIframeDots()
+    for _, dot in pairs(iframeDots) do
+        if dot and dot.Parent then dot.Parent:Destroy() end
+    end
+    iframeDots = {}
+end
+
+track(RunService.Heartbeat:Connect(function()
+    if not HubAlive then return end
+    local chars = Workspace:FindFirstChild("characters")
+    for _, ch in ipairs(chars and chars:GetChildren() or {}) do
+        local s = ch:FindFirstChild("state")
+        local on = Config.IframeESP and s and ((s:FindFirstChild("iframe") and s.iframe.Value) or (s:FindFirstChild("trueIframe") and s.trueIframe.Value))
+        if on or Marks[ch] then markFor(ch).Enabled = on and true or false end
+    end
+
+    if Config.IframeDotESP and chars then
+        for _, ch in ipairs(chars:GetChildren()) do
+            local hrp = ch:FindFirstChild("HumanoidRootPart")
+            if hrp and not iframeDots[ch] then
+                local gui = Instance.new("BillboardGui")
+                gui.Name = "IframeDot"
+                gui.Size = UDim2.new(0, 12, 0, 12)
+                gui.StudsOffset = Vector3.new(0, 3, 0)
+                gui.AlwaysOnTop = true
+                gui.Adornee = hrp
+                gui.Parent = hrp
+                local dot = Instance.new("Frame")
+                dot.Size = UDim2.new(0, 6, 0, 6)
+                dot.Position = UDim2.new(0.5, -3, 0.5, -3)
+                dot.BackgroundColor3 = Color3.fromRGB(128,128,128)
+                dot.BorderSizePixel = 0
+                dot.Parent = gui
+                iframeDots[ch] = dot
+            end
+            local dot = iframeDots[ch]
+            if dot then
+                local st = ch:FindFirstChild("state")
+                local iff = st and st:FindFirstChild("iframe")
+                if iff and iff:IsA("BoolValue") then
+                    dot.BackgroundColor3 = iff.Value and Color3.fromRGB(255,0,0) or Color3.fromRGB(0,255,0)
+                else
+                    dot.BackgroundColor3 = Color3.fromRGB(128,128,128)
+                end
+            end
+        end
+    elseif next(iframeDots) then
+        clearIframeDots()
+    end
+
+    if Config.BallESP then
+        if not (ballMark and ballMark.Parent) then
+            ballMark = Instance.new("SphereHandleAdornment")
+            ballMark.Name = "BallMark"
+            ballMark.Radius = 1.8
+            ballMark.AlwaysOnTop = true
+            ballMark.ZIndex = 10
+            ballMark.Color3 = Color3.fromRGB(255, 200, 60)
+            ballMark.Transparency = 0.35
+            ballMark.Parent = espRoot
+        end
+        local b = ballPart()
+        if ballMark.Adornee ~= b then ballMark.Adornee = b end
+        ballMark.Visible = b ~= nil
+    elseif ballMark then
+        ballMark:Destroy()
+        ballMark = nil
+    end
+end))
+
+-- ============================================================
+--  Shared collision helpers
+-- ============================================================
+local function disableCollisions()
+    local map = Workspace:FindFirstChild("map")
+    if not map then return end
+    local gk = map:FindFirstChild("gkbarriar")
+    if gk then
+        if gk:FindFirstChild("A") then gk.A.CanCollide = false end
+        if gk:FindFirstChild("B") then gk.B.CanCollide = false end
+    end
+    local ag, bg = map:FindFirstChild("Agoal"), map:FindFirstChild("Bgoal")
+    if ag then ag.CanCollide = false end
+    if bg then bg.CanCollide = false end
+end
+local function setCollisions(on)
+    local map = Workspace:FindFirstChild("map")
+    if not map then return end
+    local gk = map:FindFirstChild("gkbarriar")
+    if gk then
+        if gk:FindFirstChild("A") then gk.A.CanCollide = on end
+        if gk:FindFirstChild("B") then gk.B.CanCollide = on end
+    end
+    local ag, bg = map:FindFirstChild("Agoal"), map:FindFirstChild("Bgoal")
+    if ag then ag.CanCollide = on end
+    if bg then bg.CanCollide = on end
+end
+
+-- ============================================================
+--  Auto Goal
+-- ============================================================
+local autoGoalState = { enabled = false, conn = nil }
+local function startAutoGoal()
+    if autoGoalState.enabled then return end
+    autoGoalState.enabled = true
+    local map = Workspace:WaitForChild("map")
+    local agoal, bgoal = map:WaitForChild("Agoal"), map:WaitForChild("Bgoal")
+    autoGoalState.conn = RunService.RenderStepped:Connect(function()
+        if not autoGoalState.enabled then return end
+        pcall(function()
+            if not onPitch() then return end
+            disableCollisions()
+            local r = myRoot()
+            if not r then return end
+            local ball = Workspace.Terrain:FindFirstChild("Ball")
+            if ball and not holder() then
+                r.CFrame = CFrame.new(ball.Position.X, 0, ball.Position.Z)
+            end
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= LocalPlayer and p.Character then
+                    local ob = p.Character:FindFirstChild("Ball")
+                    local oroot = p.Character:FindFirstChild("HumanoidRootPart")
+                    if ob and oroot and r then
+                        r.CFrame = ob.CFrame
+                        fireBase({{"tackle"}})
+                    end
+                end
+            end
+            if iHaveBall() then
+                local team = teamOf(myChar())
+                local goal = team == "A" and bgoal or agoal
+                if goal and r then
+                    r.CFrame = goal.CFrame
+                    task.wait(0.185)
+                    fireBase({{"kick", 20, false, vector.create(0,1,0)}})
+                end
+            end
+        end)
+    end)
+end
+local function stopAutoGoal()
+    autoGoalState.enabled = false
+    if autoGoalState.conn then autoGoalState.conn:Disconnect() autoGoalState.conn = nil end
+end
+
+-- ============================================================
+--  Auto GK (Main)
+-- ============================================================
+local autoGkState = { enabled = false, connections = {}, look = nil, pause = false, lastHolder = nil, gui = nil }
+local function stopAutoGK()
+    autoGkState.enabled = false
+    for _, c in ipairs(autoGkState.connections) do pcall(function() c:Disconnect() end) end
+    table.clear(autoGkState.connections)
+    if autoGkState.look then pcall(function() autoGkState.look:Destroy() end) autoGkState.look = nil end
+    if autoGkState.gui then pcall(function() autoGkState.gui:Destroy() end) autoGkState.gui = nil end
+end
+local function startAutoGK()
+    if autoGkState.enabled then return end
+    local char = myChar() or LocalPlayer.CharacterAdded:Wait()
+    local hum = char:WaitForChild("Humanoid")
+    local hrp = char:WaitForChild("HumanoidRootPart")
+    autoGkState.enabled = true
+    autoGkState.pause = false
+    autoGkState.lastHolder = nil
+
+    autoGkState.gui = Instance.new("ScreenGui")
+    autoGkState.gui.Name = "AutoGKMain"
+    autoGkState.gui.ResetOnSpawn = false
+    autoGkState.gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    local dot = Instance.new("Frame")
+    dot.Size = UDim2.new(0.012, 0, 0.025, 0)
+    dot.Position = UDim2.new(0.988, 0, 0.975, 0)
+    dot.BorderSizePixel = 0
+    dot.BackgroundColor3 = Color3.fromRGB(0,255,0)
+    dot.Parent = autoGkState.gui
+
+    autoGkState.look = Instance.new("AlignOrientation")
+    autoGkState.look.Name = "AutoGKLook"
+    autoGkState.look.Mode = Enum.OrientationAlignmentMode.OneAttachment
+    autoGkState.look.Attachment0 = hrp:WaitForChild("RootAttachment")
+    autoGkState.look.Responsiveness = 1200
+    autoGkState.look.MaxTorque = math.huge
+    autoGkState.look.Enabled = false
+    autoGkState.look.Parent = hrp
+
+    local ballHolder = RSW and RSW:FindFirstChild("ballHolder")
+    if not ballHolder then return end
+    autoGkState.lastHolder = ballHolder.Value
+
+    local velSmooth, lastVel = Vector3.zero, Vector3.zero
+    local GRAVITY = Vector3.new(0, -Workspace.Gravity, 0)
+    local magnetBurstActive = false
+
+    local function getBall()
+        local b = Workspace.Terrain:FindFirstChild("Ball")
+        if not b then b = Workspace:FindFirstChild("Ball", true) end
+        return b
+    end
+
+    local function predictgoalimpact(pos, vel, accel, goal)
+        if not goal then return nil end
+        local cf = goal.CFrame
+        local normal = cf.LookVector
+        local rel = pos - cf.Position
+        local a = 0.5 * accel:Dot(normal)
+        local b = vel:Dot(normal)
+        local c = rel:Dot(normal)
+        if math.abs(a) < 1e-6 then
+            if math.abs(b) < 1e-6 then return nil end
+            local t = -c / b
+            return t > 0 and t or nil
+        end
+        local disc = b*b - 4*a*c
+        if disc < 0 then return nil end
+        local sd = math.sqrt(disc)
+        local t1 = (-b - sd) / (2*a)
+        local t2 = (-b + sd) / (2*a)
+        return (t1 > 0 and t1) or (t2 > 0 and t2)
+    end
+
+    table.insert(autoGkState.connections, ballHolder.Changed:Connect(function(cur)
+        if autoGkState.lastHolder == char and cur == nil then
+            autoGkState.pause = true
+            task.delay(2.6, function() autoGkState.pause = false end)
+        end
+        autoGkState.lastHolder = cur
+    end))
+
+    table.insert(autoGkState.connections, RunService.RenderStepped:Connect(function(dt)
+        if not autoGkState.enabled or autoGkState.pause then
+            if autoGkState.look then autoGkState.look.Enabled = false end
+            return
+        end
+        if not onPitch() then
+            if autoGkState.look then autoGkState.look.Enabled = false end
+            return
+        end
+        if not (hrp and hrp.Parent) then return end
+        local currentHolder = ballHolder.Value
+        if currentHolder == char then
+            if autoGkState.look then autoGkState.look.Enabled = false end
+            return
+        end
+        local ball = getBall()
+        if currentHolder and currentHolder:FindFirstChild("HumanoidRootPart") then
+            local hr = currentHolder.HumanoidRootPart
+            if autoGkState.look then
+                autoGkState.look.Enabled = true
+                autoGkState.look.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(hr.Position.X, hrp.Position.Y, hr.Position.Z))
+            end
+            if (hrp.Position - hr.Position).Magnitude <= 35 then
+                fireBase({{"tackle"}})
+            end
+        elseif ball then
+            local rawVel = ball.AssemblyLinearVelocity
+            velSmooth = velSmooth:Lerp(rawVel, math.clamp(dt*15, 0, 1))
+            local accel = (velSmooth - lastVel) / math.max(dt, 1/240)
+            lastVel = velSmooth
+            local team = teamOf(char)
+            local map = Workspace:FindFirstChild("map")
+            local goal = map and map:FindFirstChild(team == "A" and "Agoal" or "Bgoal")
+            local tImpact = predictgoalimpact(ball.Position, velSmooth, accel, goal)
+            local predicted
+            if tImpact then
+                predicted = ball.Position + velSmooth * tImpact + 0.5 * accel * tImpact * tImpact
+            else
+                predicted = ball.Position + velSmooth * 0.25 + 0.5 * GRAVITY * 0.0625
+            end
+            if autoGkState.look then
+                autoGkState.look.Enabled = true
+                autoGkState.look.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(predicted.X, hrp.Position.Y, predicted.Z))
+            end
+            local dist = (hrp.Position - ball.Position).Magnitude
+            if dist > 35 and dist <= 37 and ball.Position.Y > hrp.Position.Y + 4 then
+                hum.Jump = true
+            end
+            if dist <= 35 then
+                fireBase({{"tackle"}})
+                if not magnetBurstActive then
+                    magnetBurstActive = true
+                    task.spawn(function()
+                        local start = os.clock()
+                        while os.clock() - start < 0.897 and autoGkState.enabled do
+                            fireRaw(buffers.grabball)
+                            task.wait(0.125)
+                        end
+                        magnetBurstActive = false
+                    end)
+                end
+            end
+        else
+            if autoGkState.look then autoGkState.look.Enabled = false end
+        end
+    end))
+
+    table.insert(autoGkState.connections, hum.Died:Connect(stopAutoGK))
+    table.insert(autoGkState.connections, LocalPlayer.CharacterAdded:Connect(stopAutoGK))
+end
+
+-- ============================================================
+--  Auto GK (Alt)
+-- ============================================================
+local altGK = { enabled = false, conn = nil, input = nil, gui = nil, align = nil, kind = nil, pause = false, lastHolder = nil, char = nil, hum = nil, hrp = nil }
+local function stopAltGK()
+    altGK.enabled = false
+    if altGK.conn then altGK.conn:Disconnect() altGK.conn = nil end
+    if altGK.input then altGK.input:Disconnect() altGK.input = nil end
+    if altGK.gui then altGK.gui:Destroy() altGK.gui = nil end
+    if altGK.align then altGK.align:Destroy() altGK.align = nil end
+    if altGK.hum then pcall(function() altGK.hum.AutoRotate = true end) end
+end
+local function startAltGK()
+    if altGK.enabled then return end
+    local char = myChar() or LocalPlayer.CharacterAdded:Wait()
+    local hum = char:WaitForChild("Humanoid")
+    local hrp = char:WaitForChild("HumanoidRootPart")
+    altGK.char, altGK.hum, altGK.hrp = char, hum, hrp
+    altGK.enabled = true
+    altGK.pause = false
+    altGK.kind = nil
+
+    altGK.gui = Instance.new("ScreenGui")
+    altGK.gui.Name = "AutoGKAlt"
+    altGK.gui.ResetOnSpawn = false
+    altGK.gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    local camB = Instance.new("TextButton")
+    camB.Text = "Camera Mode"
+    camB.Size = UDim2.new(0.159,0,0.109,0)
+    camB.Position = UDim2.new(0.317,0,0.444,0)
+    camB.TextScaled = true
+    camB.Parent = altGK.gui
+    local bodyB = Instance.new("TextButton")
+    bodyB.Text = "Body Mode"
+    bodyB.Size = UDim2.new(0.159,0,0.109,0)
+    bodyB.Position = UDim2.new(0.524,0,0.444,0)
+    bodyB.TextScaled = true
+    bodyB.Parent = altGK.gui
+    local dot = Instance.new("Frame")
+    dot.Size = UDim2.new(0.012,0,0.025,0)
+    dot.Position = UDim2.new(0.988,0,0.975,0)
+    dot.BackgroundColor3 = Color3.fromRGB(0,255,0)
+    dot.BorderSizePixel = 0
+    dot.Parent = altGK.gui
+
+    camB.MouseButton1Up:Connect(function() altGK.kind = "cam" end)
+    bodyB.MouseButton1Up:Connect(function() altGK.kind = "body" end)
+
+    task.spawn(function()
+        local t0 = os.clock()
+        repeat task.wait() until altGK.kind or os.clock() - t0 > 30 or not altGK.enabled
+        if not altGK.kind then stopAltGK() return end
+        camB:Destroy() bodyB:Destroy()
+        if altGK.kind == "body" then
+            hum.AutoRotate = false
+            altGK.align = Instance.new("AlignOrientation")
+            altGK.align.Mode = Enum.OrientationAlignmentMode.OneAttachment
+            altGK.align.Attachment0 = hrp:WaitForChild("RootAttachment")
+            altGK.align.Responsiveness = 300
+            altGK.align.MaxTorque = math.huge
+            altGK.align.Enabled = false
+            altGK.align.Parent = hrp
+        end
+    end)
+
+    local ballHolder = RSW and RSW:FindFirstChild("ballHolder")
+    if ballHolder then
+        altGK.lastHolder = ballHolder.Value
+        ballHolder.Changed:Connect(function()
+            local cur = ballHolder.Value
+            if altGK.lastHolder == altGK.char and cur == nil then
+                altGK.pause = true
+                task.delay(0.7, function() altGK.pause = false end)
+            end
+            altGK.lastHolder = cur
+        end)
+    end
+
+    local cam = Workspace.CurrentCamera
+    local originalCamType = cam.CameraType
+    local originalCamCF = cam.CFrame
+
+    altGK.conn = RunService.RenderStepped:Connect(function()
+        if not altGK.enabled then return end
+        local ball = Workspace.Terrain:FindFirstChild("Ball")
+        if not ball or not onPitch() or altGK.pause then
+            if altGK.align then altGK.align.Enabled = false end
+            return
+        end
+        if altGK.kind == "cam" then
+            cam.CameraType = Enum.CameraType.Scriptable
+            cam.CFrame = CFrame.lookAt(cam.CFrame.Position, ball.Position)
+        elseif altGK.kind == "body" and altGK.align then
+            altGK.align.Enabled = true
+            local dir = ball.Position - altGK.hrp.Position
+            dir = Vector3.new(dir.X, 0, dir.Z)
+            if dir.Magnitude > 0.01 then
+                altGK.align.CFrame = CFrame.lookAt(Vector3.zero, dir)
+            end
+        end
+        local dist = (altGK.hrp.Position - ball.Position).Magnitude
+        if dist <= 60 then
+            if ball.Position.Y >= altGK.hrp.Position.Y + 6 then altGK.hum.Jump = true
+            else altGK.hum.Jump = false end
+            fireBase({{"tackle"}})
+        end
+    end)
+
+    altGK.input = UserInputService.InputBegan:Connect(function(input, gp)
+        if gp then return end
+        if input.KeyCode == Enum.KeyCode.F4 then
+            cam.CameraType = originalCamType
+            cam.CFrame = originalCamCF
+            stopAltGK()
+        end
+    end)
+end
+
+-- ============================================================
+--  GK Anywhere
+-- ============================================================
+local gkAnywhereHooked = false
+local function gkAnywhere()
+    if gkAnywhereHooked then return end
+    local ok = pcall(function()
+        local module = ReplicatedStorage.util.actionUtil
+        local env = require(module)
+        hookfunction(env.checkGK, function(...) return true end)
+        gkAnywhereHooked = true
+    end)
+    if ok then
+        StarterGui:SetCore("SendNotification", { Title = "GK Anywhere", Text = "Enabled. Rejoin to disable.", Duration = 5 })
+    end
+end
+
+-- ============================================================
+--  Pick GK / CF
+-- ============================================================
+local function firePick(role, side)
+    if not (pick and side) then return end
+    fireRaw(pick .. role .. "\001\000" .. side)
+end
+local function pickGKFn()
+    firePick("\005\001", "B")
+    firePick("\005\001", "A")
+end
+local function pickCFFn()
+    local r = myRoot()
+    if not r then return end
+    if (r.Position - Vector3.new(-371,13,-1599)).Magnitude <= 15 or
+       (r.Position - Vector3.new(-196,13,-1599)).Magnitude <= 15 then
+        firePick("\001\001", "A")
+        firePick("\001\001", "B")
+    end
+end
+
+-- ============================================================
+--  No Goal Walls
+-- ============================================================
+local blatantConn
+local function startBlatant()
+    if blatantConn then return end
+    blatantConn = RunService.Heartbeat:Connect(function() setCollisions(false) end)
+end
+local function stopBlatant()
+    if blatantConn then blatantConn:Disconnect() blatantConn = nil end
+    setCollisions(true)
+end
+
+-- ============================================================
+--  Max Power Kick
+-- ============================================================
+local kickHard = false
+local kickHookInstalled = false
+local function installKickHook()
+    if kickHookInstalled then return end
+    kickHookInstalled = true
+    local ok = pcall(function()
+        local meta = getrawmetatable(game)
+        local oldIndex = meta.__index
+        local oldNamecall = meta.__namecall
+        setreadonly(meta, false)
+        local function modKick(args)
+            if not kickHard then return end
+            if type(args) == "table" and type(args[2]) == "table" then
+                for _, sub in pairs(args[2]) do
+                    if type(sub) == "table" and sub[1] == "kick" then sub[2] = 100 end
+                end
+            end
+        end
+        meta.__index = newcclosure(function(self, key)
+            if self == ByteNetReliable and (key == "FireServer" or key == "fireServer") then
+                return newcclosure(function(remote, ...)
+                    local args = {...}
+                    modKick(args)
+                    return oldIndex(remote, key)(remote, unpack(args))
+                end)
+            end
+            return oldIndex(self, key)
+        end)
+        meta.__namecall = newcclosure(function(self, ...)
+            local args = {...}
+            local method = getnamecallmethod()
+            if self == ByteNetReliable and (method == "FireServer" or method == "fireServer") then
+                modKick(args)
+                return oldNamecall(self, unpack(args))
+            end
+            return oldNamecall(self, ...)
+        end)
+        setreadonly(meta, true)
+    end)
+    if not ok then kickHookInstalled = false end
+end
+
+-- ============================================================
+--  Break Ball
+-- ============================================================
+local function breakBallPlayer()
+    local base = Vector3.new(-190, 14864566, 492)
+    local size = Vector3.new(10, 1, 10)
+    for x = 0, 2 do
+        for z = 0, 2 do
+            local p = Instance.new("Part")
+            p.Size = size
+            p.Anchored = true
+            p.Position = base + Vector3.new(x * size.X, 0, z * size.Z)
+            p.Parent = Workspace
+        end
+    end
+    local r = myRoot()
+    if r then r.CFrame = CFrame.new(base + Vector3.new(0, 100000000000000, 0)) end
+end
+local function breakBallBall()
+    local r = myRoot()
+    if not r then return end
+    local orig = r.Position
+    r.CFrame = CFrame.new(Vector3.new(-390, 475, 354))
+    task.wait(0.3)
+    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+    task.wait(0.1)
+    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+    task.wait(0.3)
+    r.CFrame = CFrame.new(orig)
+end
+local function permBreakBall()
+    Workspace.FallenPartsDestroyHeight = -50000
+    local c = myChar()
+    if c and c.PrimaryPart then
+        c:SetPrimaryPartCFrame(CFrame.new(1, -49999, 1))
+    end
+end
+
+-- ============================================================
+--  Auto QTE
+-- ============================================================
+local qteEnabled = false
+local function isShadeOfGreen(c) return c.G > c.R and c.G > c.B end
+local function checkQTE()
+    if not qteEnabled then return end
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pg then return end
+    local q = pg:FindFirstChild("Qte")
+    if not q or not q:FindFirstChild("QTE") then return end
+    for _, d in ipairs(q.QTE:GetDescendants()) do
+        if d:IsA("Frame") or d:IsA("TextLabel") then
+            if isShadeOfGreen(d.BackgroundColor3) then
+                local tl = q.QTE:FindFirstChild("TextLabel")
+                if tl then
+                    local map = { ["1"]="One",["2"]="Two",["3"]="Three",["4"]="Four",["5"]="Five",
+                                  ["6"]="Six",["7"]="Seven",["8"]="Eight",["9"]="Nine",["0"]="Zero" }
+                    local text = map[tl.Text] or tl.Text
+                    local kc = Enum.KeyCode[text]
+                    if kc then
+                        VirtualInputManager:SendKeyEvent(true, kc, false, game)
+                        VirtualInputManager:SendKeyEvent(false, kc, false, game)
+                    end
+                end
+                break
+            end
+        end
+    end
+end
+track(RunService.RenderStepped:Connect(function() pcall(checkQTE) end))
+
+-- ============================================================
+--  Steal Ball
+-- ============================================================
+local stealAnims = {
+    "rbxassetid://123994829903056",
+    "rbxassetid://73092083880817",
+    "rbxassetid://114866946968143",
+    "rbxassetid://88690614253524",
+    "rbxassetid://107389719253201",
+    "rbxassetid://133382731392749",
+}
+local stealConns = {}
+local stealEnabled = false
+local stealSkill = "tackle"
+local function stopSteal()
+    for _, c in ipairs(stealConns) do pcall(function() c:Disconnect() end) end
+    table.clear(stealConns)
+end
+local function hookStealPlayer(plr)
+    if plr == LocalPlayer then return end
+    local function hookChar(ch)
+        local hum = ch:WaitForChild("Humanoid", 6)
+        if not hum then return end
+        local animator = hum:FindFirstChildOfClass("Animator") or hum:WaitForChild("Animator", 4)
+        if not animator then return end
+        local conn = animator.AnimationPlayed:Connect(function(trackAnim)
+            if not stealEnabled then return end
+            if not trackAnim.Animation then return end
+            local id = trackAnim.Animation.AnimationId
+            local hit = false
+            for _, a in ipairs(stealAnims) do if id == a then hit = true break end end
+            if not hit then return end
+            local me = myChar()
+            local r = myRoot()
+            local tr = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+            if not (r and tr and me) then return end
+            if (r.Position - tr.Position).Magnitude > 20 then return end
+            local t0 = tick()
+            local c
+            c = RunService.RenderStepped:Connect(function()
+                if not stealEnabled or tick() - t0 > 0.5 then
+                    c:Disconnect()
+                    return
+                end
+                local p = r.Position
+                local tp = tr.Position
+                r.CFrame = CFrame.lookAt(p, Vector3.new(tp.X, p.Y, tp.Z))
+                fireBase({{stealSkill}})
+            end)
+            table.insert(stealConns, c)
+        end)
+        table.insert(stealConns, conn)
+    end
+    if plr.Character then hookChar(plr.Character) end
+    table.insert(stealConns, plr.CharacterAdded:Connect(hookChar))
+end
+local function startSteal()
+    if stealEnabled then return end
+    stealEnabled = true
+    for _, p in ipairs(Players:GetPlayers()) do hookStealPlayer(p) end
+    table.insert(stealConns, Players.PlayerAdded:Connect(hookStealPlayer))
+end
+local function setSteal(enabled, skill)
+    stealSkill = skill or "tackle"
+    if enabled then startSteal() else stealEnabled = false stopSteal() end
+end
+
+-- ============================================================
+--  Auto Formless
+-- ============================================================
+local formlessBind = Enum.KeyCode.Y
+local formlessConn
+local function formlessTrigger()
+    if UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCenter then return end
+    local char = myChar()
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then return end
+    hum.AutoRotate = false
+    local cam = Workspace.CurrentCamera
+    local camType, camSub, camCF = cam.CameraType, cam.CameraSubject, cam.CFrame
+    cam.CameraType = Enum.CameraType.Scriptable
+    cam.CFrame = camCF * CFrame.Angles(0, math.rad(180), 0)
+    task.delay(0.1, function()
+        if myChar() and myChar():FindFirstChildOfClass("Humanoid") then
+            cam.CameraSubject = myChar():FindFirstChildOfClass("Humanoid")
+            cam.CameraType = Enum.CameraType.Custom
+        else
+            cam.CameraSubject = camSub
+            cam.CameraType = camType
+        end
+        hum.AutoRotate = true
+    end)
+    task.wait(0.15)
+    local anim = Instance.new("Animation")
+    anim.AnimationId = "rbxassetid://76587445975710"
+    hum:LoadAnimation(anim):Play()
+    local dir = hrp.CFrame.LookVector
+    local kv = vector.create(dir.X * 0.5, 1, dir.Z * 0.5)
+    fireBase({{"kick", 25, false, kv}})
+    fireBase({{"skill1"}})
+end
+local function setFormless(on)
+    if formlessConn then formlessConn:Disconnect() formlessConn = nil end
+    if not on then return end
+    formlessConn = UserInputService.InputBegan:Connect(function(input, gp)
+        if gp or input.KeyCode ~= formlessBind then return end
+        pcall(formlessTrigger)
+    end)
+end
+
+-- ============================================================
+--  Air Dribble
+-- ============================================================
+local airBind = Enum.KeyCode.LeftAlt
+local airEnabled = false
+local airHolding = false
+local airConn
+local airLast = 0
+local function airKick()
+    local now = tick()
+    if now - airLast < 0.255 then return end
+    local char = myChar()
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local r = myRoot()
+    if not (hum and r) then return end
+    airLast = now
+    local anim = Instance.new("Animation")
+    anim.AnimationId = "rbxassetid://76587445975710"
+    hum:LoadAnimation(anim):Play()
+    local dir = r.CFrame.LookVector
+    local kv = Vector3.new(dir.X * 0.75, 0.65, dir.Z * 0.75)
+    fireBase({{"kick", 28, false, kv}})
+end
+local function setAir(on)
+    airEnabled = on
+    if not on then
+        airHolding = false
+        if airConn then airConn:Disconnect() airConn = nil end
+    end
+end
+track(UserInputService.InputBegan:Connect(function(input, gp)
+    if gp or input.KeyCode ~= airBind or not airEnabled then return end
+    airHolding = true
+    airKick()
+    if airConn then airConn:Disconnect() end
+    airConn = RunService.Heartbeat:Connect(function()
+        if airHolding and airEnabled then airKick()
+        else if airConn then airConn:Disconnect() airConn = nil end end
+    end)
+end))
+track(UserInputService.InputEnded:Connect(function(input)
+    if input.KeyCode == airBind then
+        airHolding = false
+        if airConn then airConn:Disconnect() airConn = nil end
+    end
+end))
+
+-- ============================================================
+--  Move Buffs
+-- ============================================================
+local DashConfigs = {
+    Tackle = { animId = "rbxassetid://109744655458082", sliderVar = "tackleDist", duration = 0.4, wait = 0 },
+    Rush = { animId = "rbxassetid://79394729551302", sliderVar = "rushDist", duration = 0.4, wait = 0.15 },
+    GKDash = { animId = "rbxassetid://90537955276413", sliderVar = "gkDist", duration = 0.55, wait = 0.05 },
+    Naruhaya = { animId = "rbxassetid://82240286756891", sliderVar = "naruhayaDist", duration = 0.45, wait = 0.33 },
+    Raumdeuter = { animIds = {["rbxassetid://81582265162782"] = true}, sliderVar = "raumDist", duration = 0.55, wait = 0.1 },
+    DraconicRush = { animId = "rbxassetid://95359966795185", sliderVar = "dracDist", duration = 0.625, wait = 0.175 },
+    StepOvers = { animId = "rbxassetid://84063609284472", sliderVar = "stepDist", duration = 0.15, wait = 1.275 },
+    KaiserOffBall = { animId = "rbxassetid://110660551661470", sliderVar = "kaiserDist", duration = 0.55, wait = 0.15 },
+    OcclusionBreak = { animId = "rbxassetid://116181317759538", sliderVar = "occlusionDist", duration = 1.0, wait = 0.2 },
+    DivingHeader = { animId = "rbxassetid://91506202951715", sliderVar = "divingDist", duration = 0.35, wait = 0.05 },
+    ReflexTackle = { animId = "rbxassetid://113088324958896", sliderVar = "reflexDist", duration = 0.2, wait = 0 },
+    RazorBreak = { animIds = {
+        ["rbxassetid://131681055843039"] = "Front", ["rbxassetid://114963791456755"] = "Left",
+        ["rbxassetid://115966658644919"] = "Right", ["rbxassetid://122404546980503"] = "Back",
+        ["rbxassetid://70754845580062"] = "RightBack", ["rbxassetid://128061536134952"] = "LeftBack",
+        ["rbxassetid://71501932579824"] = "FrontRight", ["rbxassetid://96632954418440"] = "FrontLeft",
+        ["rbxassetid://70397727954557"] = "Front", ["rbxassetid://131196726012273"] = "Front",
+    }, sliderVar = "razorDist", duration = 0.35, wait = 0.1, isDirectional = true },
+    CutIn = { animIds = {["rbxassetid://71217538180364"] = true, ["rbxassetid://87853371514282"] = true}, sliderVar = "dragDist", duration = 1.0, wait = 0.2 },
+    HeroInstinct = { animId = "rbxassetid://82417661349987", sliderVar = "instinctDist", duration = 1.25, wait = 0.33 },
+    CloseQuarterDribble = { animId = "rbxassetid://94171465685487", sliderVar = "quarterDist", duration = 2.25, wait = 0.18 },
+    SpeedyTurn = { animId = "rbxassetid://109145068926350", sliderVar = "speedyDist", duration = 0.7, wait = 0.05 },
+    Fetch = { animId = "rbxassetid://110734304480469", sliderVar = "fetchDist", duration = 0.525, wait = 0.125 },
+    GoGo = { animId = "rbxassetid://111297568709238", sliderVar = "gogoDist", duration = 0.35, wait = 0.55 },
+    GuardDog = { animId = "rbxassetid://111439544531399", sliderVar = "guardDist", duration = 0.35, wait = 0.1 },
+    ZombieDribble = { animId = "rbxassetid://102294508090597", sliderVar = "zombDist", duration = 1.7, wait = 0.15 },
+    Creative = { animId = "rbxassetid://77926234700416", sliderVar = "creativeDist", duration = 0.2, wait = 0.85 },
+    GlacialCut = { animId = "rbxassetid://116769918041530", sliderVar = "glacialDist", duration = 0.5, wait = 0.425 },
+    Beautiful = { animIds = {["rbxassetid://132788854309681"] = true, ["rbxassetid://138985718053619"] = true}, sliderVar = "beautifulDist", duration = 0.3, wait = 0 },
+    ControlVar = { animId = "rbxassetid://77370115011368", sliderVar = "controlVarDist", duration = 0.3, wait = 0.1 },
+    Corvine = { animId = "rbxassetid://79459013513539", sliderVar = "corvineDist", duration = 0.4, wait = 1.1 },
+    Kusarigama = { animId = "rbxassetid://84772583028665", sliderVar = "kusarDist", duration = 0.55, wait = 0 },
+    ShadowStep = { animIds = {["rbxassetid://133810381664491"] = true, ["rbxassetid://139230259021390"] = true}, sliderVar = "shadowDist", duration = 0.3, wait = 0 },
+    SilentSteal = { animId = "rbxassetid://89782964116671", sliderVar = "silentDist", duration = 0.55, wait = 0.1 },
+    NutmegReflex = { animId = "rbxassetid://73266865968554", sliderVar = "reflexNutmegDist", duration = 0.25, wait = 0.05 },
+    TwinSteps = { animId = "rbxassetid://106299517516303", sliderVar = "twinStepsDist", duration = 0.15, wait = 1.75 },
+    KingsPath = { animId = "rbxassetid://73560885704292", sliderVar = "kingsDist", duration = 1.175, wait = 0.4 },
+    MachCutIn = { animIds = {["rbxassetid://133945265328817"] = true, ["rbxassetid://88448030655006"] = true}, sliderVar = "machDist", duration = 0.15, wait = 0.625 },
+    GoldenZone = { animId = "rbxassetid://132426354821688", sliderVar = "goldenDist", duration = 2.0, requiresBall = true, wait = 0.15 },
+    Devour = { animId = "rbxassetid://117921992582675", sliderVar = "devourMaxDist", speed = 150, isUnlimited = true, wait = 0.2 },
+}
+local Distances = {}
+for _, cfg in pairs(DashConfigs) do Distances[cfg.sliderVar] = 0 end
+
+local ActiveDashes = {}
+local renderConn
+local ZERO = Vector3.new()
+local DEFAULT_DIR = Vector3.new(0,0,1)
+local DirectionOffsets = {
+    Front = Vector3.new(0, 0, 1), Back = Vector3.new(0, 0, -1),
+    Left = Vector3.new(-1, 0, 0), Right = Vector3.new(1, 0, 0),
+    FrontLeft = Vector3.new(-1, 0, 1).Unit, FrontRight = Vector3.new(1, 0, 1).Unit,
+    LeftBack = Vector3.new(-1, 0, -1).Unit, RightBack = Vector3.new(1, 0, -1).Unit,
+}
+local function updateDashes(dt)
+    for i = #ActiveDashes, 1, -1 do
+        local dash = ActiveDashes[i]
+        local hrp = dash.hrp
+        if not hrp or not hrp.Parent then table.remove(ActiveDashes, i) continue end
+        local step = dash.cfg.isUnlimited and (dash.speed * dt) or math.min(dash.speed * dt, dash.remaining)
+        local moveDir
+        if dash.isDirectional then
+            local baseLook = hrp.CFrame.LookVector
+            local right = baseLook:Cross(Vector3.new(0,1,0))
+            local offset = dash.offset
+            moveDir = (right * -offset.X + baseLook * offset.Z).Unit
+        else
+            local look = hrp.CFrame.LookVector
+            moveDir = Vector3.new(look.X, 0, look.Z).Unit
+            if moveDir.Magnitude < 0.01 then moveDir = DEFAULT_DIR end
+        end
+        local newPos = hrp.Position + moveDir * step
+        hrp.CFrame = CFrame.new(newPos.X, hrp.Position.Y, newPos.Z) * CFrame.new(ZERO, moveDir)
+        dash.remaining = dash.remaining - step
+        if dash.remaining <= 0 then table.remove(ActiveDashes, i) end
+    end
+    if #ActiveDashes == 0 and renderConn then renderConn:Disconnect() renderConn = nil end
+end
+local function startUpdateIfNeeded()
+    if not renderConn and #ActiveDashes > 0 then
+        renderConn = RunService.RenderStepped:Connect(updateDashes)
+    end
+end
+local function startDash(hrp, cfg, trackAnim, directionName)
+    local dist = Distances[cfg.sliderVar]
+    if dist <= 0 then return end
+    task.delay(cfg.wait or 0, function()
+        if not hrp or not hrp.Parent then return end
+        local dash = { hrp = hrp, remaining = dist, cfg = cfg, isDirectional = cfg.isDirectional == true }
+        if dash.isDirectional and directionName then
+            dash.offset = DirectionOffsets[directionName] or Vector3.new(0,0,1)
+        end
+        if cfg.isUnlimited then
+            dash.remaining = math.huge
+            dash.speed = cfg.speed
+            if trackAnim then
+                local stop
+                stop = trackAnim.Stopped:Connect(function() dash.remaining = 0 if stop then stop:Disconnect() end end)
+            end
+        else
+            dash.speed = dist / cfg.duration
+        end
+        table.insert(ActiveDashes, dash)
+        startUpdateIfNeeded()
+    end)
+end
+local dashHRP
+local function onAnimPlayed(trackAnim)
+    if not trackAnim.Animation then return end
+    local id = trackAnim.Animation.AnimationId
+    for _, cfg in pairs(DashConfigs) do
+        local match = false
+        local dirName = nil
+        if cfg.animId and id == cfg.animId then match = true
+        elseif cfg.animIds then
+            if cfg.isDirectional then
+                dirName = cfg.animIds[id]
+                if dirName then match = true end
+            elseif cfg.animIds[id] then match = true end
+        end
+        if match and dashHRP and dashHRP.Parent then
+            if cfg.requiresBall then
+                local ball = dashHRP.Parent:FindFirstChild("Ball")
+                if not ball or not ball:IsA("MeshPart") then continue end
+            end
+            startDash(dashHRP, cfg, trackAnim, dirName)
+        end
+    end
+end
+local function setupDashChar(char)
+    local hum = char:WaitForChild("Humanoid", 5)
+    if not hum then return end
+    local animator = hum:WaitForChild("Animator", 5)
+    if not animator then return end
+    dashHRP = char:WaitForChild("HumanoidRootPart", 5)
+    if not dashHRP then return end
+    track(animator.AnimationPlayed:Connect(onAnimPlayed))
+end
+if LocalPlayer.Character then setupDashChar(LocalPlayer.Character) end
+track(LocalPlayer.CharacterAdded:Connect(setupDashChar))
+
+-- ============================================================
+--  Auto Move
+-- ============================================================
+local autoAct = { distance = 10, toggle = false, move = 1, holdReleased = true, mode = "Hold", minHeight = 0 }
+local autoActGui
+track(UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        if autoAct.mode == "Hold" then autoAct.holdReleased = false
+        else autoAct.holdReleased = not autoAct.holdReleased end
+    end
+end))
+track(UserInputService.InputEnded:Connect(function(input, gp)
+    if gp then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        if autoAct.mode == "Hold" then autoAct.holdReleased = true end
+    end
+end))
+track(RunService.RenderStepped:Connect(function()
+    if not autoAct.toggle or autoAct.holdReleased then
+        if autoActGui then autoActGui:Destroy() autoActGui = nil end
+        return
+    end
+    if not autoActGui then
+        autoActGui = Instance.new("ScreenGui")
+        autoActGui.Name = "AutoAct"
+        local dot = Instance.new("Frame")
+        dot.Size = UDim2.new(0, 20, 0, 20)
+        dot.Position = UDim2.new(0, 20, 1, -40)
+        dot.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+        dot.BorderSizePixel = 0
+        local cr = Instance.new("UICorner") cr.CornerRadius = UDim.new(1, 0) cr.Parent = dot
+        dot.Parent = autoActGui
+        autoActGui.Parent = espRoot
+    end
+    local r = myRoot()
+    if not r then return end
+    local ball = Workspace.Terrain:FindFirstChild("Ball")
+    if not ball then return end
+    if (r.Position - ball.Position).Magnitude <= autoAct.distance then
+        if autoAct.minHeight > 0 then
+            local rel = ball.Position.Y - (r.Position.Y - 2)
+            if rel < autoAct.minHeight then return end
+        end
+        fireBase({{"skill" .. autoAct.move}})
+    end
+end))
+
+-- ============================================================
+--  Line Ups
+-- ============================================================
+local lineUpPads, lineUpTargets = {}, {}
+local holdingRMB = false
+local camLockConn
+local activeLineupTarget
+local lineupLockActive = false
+local currentLineupMode = "Freeze"
+
+local function clearAllPads()
+    for _, p in ipairs(lineUpPads) do if p and p.Parent then p:Destroy() end end
+    for _, t in ipairs(lineUpTargets) do if t and t.Parent then t:Destroy() end end
+    lineUpPads, lineUpTargets = {}, {}
+end
+local function makePad(pos, col)
+    local p = Instance.new("Part")
+    p.Name = "LineupPad"
+    p.Size = Vector3.new(4,4,4)
+    p.Position = pos
+    p.Transparency = 0.65
+    p.Anchored = true
+    p.CanCollide = false
+    p.Color = col
+    p.Material = Enum.Material.SmoothPlastic
+    p.Parent = Workspace
+    table.insert(lineUpPads, p)
+end
+local function makeTarget(pos, col)
+    local t = Instance.new("Part")
+    t.Name = "LineupTarget"
+    t.Shape = Enum.PartType.Ball
+    t.Size = Vector3.new(7,7,7)
+    t.Position = pos
+    t.Anchored = true
+    t.CanCollide = false
+    t.Color = col
+    t.Material = Enum.Material.Neon
+    t.Parent = Workspace
+    table.insert(lineUpTargets, t)
+end
+local function getPadUnderPlayer()
+    local r = myRoot()
+    if not r or not myChar() then return nil end
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = {myChar()}
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    local res = Workspace:Raycast(r.Position, Vector3.new(0, -6, 0), params)
+    if res and res.Instance then return res.Instance end
+end
+local function startCamLock(target)
+    activeLineupTarget = target
+    if camLockConn then camLockConn:Disconnect() end
+    camLockConn = RunService.RenderStepped:Connect(function()
+        if not activeLineupTarget then
+            if camLockConn then camLockConn:Disconnect() camLockConn = nil end
+            return
+        end
+        Workspace.CurrentCamera.CFrame = CFrame.new(Workspace.CurrentCamera.CFrame.Position, activeLineupTarget.Position)
+    end)
+end
+local function resetLineupPhysics()
+    if not lineupLockActive then return end
+    lineupLockActive = false
+    local char = myChar()
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local r = myRoot()
+    if currentLineupMode == "Freeze" and r then r.Anchored = false end
+    if currentLineupMode == "Slowness" and hum then hum.WalkSpeed = 30 end
+end
+local function applyLineupMode()
+    lineupLockActive = true
+    local char = myChar()
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local r = myRoot()
+    if currentLineupMode == "Freeze" and r then r.Anchored = true end
+    if currentLineupMode == "Slowness" and hum then hum.WalkSpeed = 5 end
+end
+track(UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then holdingRMB = true end
+end))
+track(UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        holdingRMB = false
+        activeLineupTarget = nil
+        if camLockConn then camLockConn:Disconnect() camLockConn = nil end
+        resetLineupPhysics()
+    end
+end))
+track(RunService.RenderStepped:Connect(function()
+    if not holdingRMB then resetLineupPhysics() return end
+    local pad = getPadUnderPlayer()
+    if not pad or pad.Name ~= "LineupPad" then
+        resetLineupPhysics()
+        activeLineupTarget = nil
+        if camLockConn then camLockConn:Disconnect() camLockConn = nil end
+        return
+    end
+    local idx = table.find(lineUpPads, pad)
+    if not idx then return end
+    local t = lineUpTargets[idx]
+    if not t then resetLineupPhysics() return end
+    if activeLineupTarget ~= t then startCamLock(t) end
+    applyLineupMode()
+end))
+
+local function loadLineUps(entries)
+    local map = Workspace:WaitForChild("map", 8)
+    if not map then return end
+    local agoal, bgoal = map:FindFirstChild("Agoal"), map:FindFirstChild("Bgoal")
+    if not (agoal and bgoal) then return end
+    local colors = {
+        Color3.fromRGB(255,0,0), Color3.fromRGB(0,255,0), Color3.fromRGB(255,255,0),
+        Color3.fromRGB(0,0,255), Color3.fromRGB(255,0,255), Color3.fromRGB(255,182,193),
+    }
+    local counts = { A = 0, B = 0 }
+    for _, entry in ipairs(entries) do
+        local base = entry.base == "A" and agoal.Position or bgoal.Position
+        local col = colors[(counts[entry.base] % #colors) + 1]
+        counts[entry.base] = counts[entry.base] + 1
+        makePad(base + entry.pad, col)
+        makeTarget(base + entry.target, col)
+    end
+end
+
+local LINEUPS = {
+    Sae = {
+        {base="A", pad=Vector3.new(-58,-9,-127), target=Vector3.new(71,35,-13)},
+        {base="A", pad=Vector3.new(-38,-9,-171), target=Vector3.new(70,18,-13)},
+        {base="A", pad=Vector3.new(-16,-9,-176), target=Vector3.new(45,45,-14)},
+        {base="A", pad=Vector3.new(15,-9,-174),  target=Vector3.new(25,25,-14)},
+        {base="A", pad=Vector3.new(48,-9,-161),  target=Vector3.new(20,32,-14)},
+        {base="A", pad=Vector3.new(71,-9,-134),  target=Vector3.new(22,5,-12)},
+        {base="A", pad=Vector3.new(86,-9,-113),  target=Vector3.new(31,19,-14)},
+        {base="A", pad=Vector3.new(99,-9,-137),  target=Vector3.new(29,34,-14)},
+        {base="A", pad=Vector3.new(-47,-9,-145), target=Vector3.new(53,28,-14)},
+        {base="A", pad=Vector3.new(132,-9,-111), target=Vector3.new(30,8,-13)},
+        {base="B", pad=Vector3.new(58,-9,127),   target=Vector3.new(-71,35,13)},
+        {base="B", pad=Vector3.new(38,-9,171),   target=Vector3.new(-70,18,13)},
+        {base="B", pad=Vector3.new(16,-9,176),   target=Vector3.new(-45,45,14)},
+        {base="B", pad=Vector3.new(-15,-9,174),  target=Vector3.new(-25,25,14)},
+        {base="B", pad=Vector3.new(-48,-9,161),  target=Vector3.new(-20,32,14)},
+        {base="B", pad=Vector3.new(-71,-9,134),  target=Vector3.new(-22,5,12)},
+        {base="B", pad=Vector3.new(-86,-9,113),  target=Vector3.new(-31,19,14)},
+        {base="B", pad=Vector3.new(-99,-9,137),  target=Vector3.new(-29,34,14)},
+        {base="B", pad=Vector3.new(47,-9,145),   target=Vector3.new(-53,28,14)},
+        {base="B", pad=Vector3.new(-132,-9,111), target=Vector3.new(-30,8,13)},
+    },
+    Kaiser = {
+        {base="B", pad=Vector3.new(-76,-9,140), target=Vector3.new(108,19,14)},
+        {base="B", pad=Vector3.new(-35,-9,178), target=Vector3.new(80,-5,14)},
+        {base="B", pad=Vector3.new(17,-9,170),  target=Vector3.new(26,18,14)},
+        {base="B", pad=Vector3.new(81,-9,178),  target=Vector3.new(35,34,14)},
+        {base="B", pad=Vector3.new(54,-9,165),  target=Vector3.new(34,2,14)},
+        {base="B", pad=Vector3.new(-55,-9,171), target=Vector3.new(87,-1,14)},
+        {base="B", pad=Vector3.new(-13,-9,161), target=Vector3.new(76,15,14)},
+        {base="B", pad=Vector3.new(-42,-9,122), target=Vector3.new(73,5,14)},
+        {base="B", pad=Vector3.new(61,-9,114),  target=Vector3.new(35,16,14)},
+        {base="B", pad=Vector3.new(130,-9,110), target=Vector3.new(50,25,14)},
+        {base="B", pad=Vector3.new(110,-9,151), target=Vector3.new(34,25,14)},
+        {base="B", pad=Vector3.new(39,-9,194),  target=Vector3.new(32,28,14)},
+        {base="A", pad=Vector3.new(76,-9,-140), target=Vector3.new(-108,19,-14)},
+        {base="A", pad=Vector3.new(35,-9,-178), target=Vector3.new(-80,-5,-14)},
+        {base="A", pad=Vector3.new(-17,-9,-170),target=Vector3.new(-26,18,-14)},
+        {base="A", pad=Vector3.new(-81,-9,-178),target=Vector3.new(-35,34,-14)},
+        {base="A", pad=Vector3.new(-54,-9,-165),target=Vector3.new(-34,2,-14)},
+        {base="A", pad=Vector3.new(55,-9,-171), target=Vector3.new(-87,-1,-14)},
+        {base="A", pad=Vector3.new(13,-9,-161), target=Vector3.new(-76,15,-14)},
+        {base="A", pad=Vector3.new(42,-9,-122), target=Vector3.new(-73,5,-14)},
+        {base="A", pad=Vector3.new(-61,-9,-114),target=Vector3.new(-35,16,-14)},
+        {base="A", pad=Vector3.new(-130,-9,-110),target=Vector3.new(-50,25,-14)},
+        {base="A", pad=Vector3.new(-110,-9,-151),target=Vector3.new(-34,25,-14)},
+        {base="A", pad=Vector3.new(-39,-9,-194),target=Vector3.new(-32,28,-14)},
+    },
+    Yukimiya = {
+        {base="A", pad=Vector3.new(3,-9,-216),   target=Vector3.new(68,144,-16)},
+        {base="A", pad=Vector3.new(62,-9,-193),  target=Vector3.new(50,91,-16)},
+        {base="A", pad=Vector3.new(-39,-9,-128), target=Vector3.new(6,0,-12)},
+        {base="A", pad=Vector3.new(-32,-9,-134), target=Vector3.new(15,8,-15)},
+        {base="A", pad=Vector3.new(-142,-9,-97), target=Vector3.new(81,65,-16)},
+        {base="A", pad=Vector3.new(-69,-9,-212), target=Vector3.new(158,223,-16)},
+        {base="A", pad=Vector3.new(32,-9,-130),  target=Vector3.new(-10,24,-14)},
+        {base="A", pad=Vector3.new(-115,-9,-160),target=Vector3.new(33,72,-14)},
+        {base="A", pad=Vector3.new(-92,-9,-188), target=Vector3.new(99,133,-13)},
+        {base="A", pad=Vector3.new(-40,-9,-208), target=Vector3.new(50,116,-14)},
+        {base="A", pad=Vector3.new(57,-9,-122),  target=Vector3.new(-8,23,-15)},
+        {base="B", pad=Vector3.new(-3,-9,216),   target=Vector3.new(-68,144,16)},
+        {base="B", pad=Vector3.new(-62,-9,193),  target=Vector3.new(-50,91,16)},
+        {base="B", pad=Vector3.new(39,-9,128),   target=Vector3.new(-6,0,12)},
+        {base="B", pad=Vector3.new(32,-9,134),   target=Vector3.new(-15,8,15)},
+        {base="B", pad=Vector3.new(142,-9,97),   target=Vector3.new(-81,65,16)},
+        {base="B", pad=Vector3.new(69,-9,212),   target=Vector3.new(-158,223,16)},
+        {base="B", pad=Vector3.new(-32,-9,130),  target=Vector3.new(10,24,14)},
+        {base="B", pad=Vector3.new(115,-9,160),  target=Vector3.new(-33,72,14)},
+        {base="B", pad=Vector3.new(92,-9,188),   target=Vector3.new(-99,133,13)},
+        {base="B", pad=Vector3.new(40,-9,208),   target=Vector3.new(-50,116,14)},
+        {base="B", pad=Vector3.new(-57,-9,122),  target=Vector3.new(8,23,15)},
+    },
+    Karasu = {
+        {base="B", pad=Vector3.new(66,-9,135),   target=Vector3.new(-44,39,14)},
+        {base="B", pad=Vector3.new(24,-9,159),   target=Vector3.new(-70,19,13)},
+        {base="B", pad=Vector3.new(43,-9,147),   target=Vector3.new(-72,34,13)},
+        {base="B", pad=Vector3.new(-12,-9,160),  target=Vector3.new(-23,25,14)},
+        {base="B", pad=Vector3.new(-46,-9,184),  target=Vector3.new(5,110,14)},
+        {base="B", pad=Vector3.new(-76,-9,160),  target=Vector3.new(-6,74,14)},
+        {base="B", pad=Vector3.new(-28,-9,178),  target=Vector3.new(-11,65,14)},
+        {base="B", pad=Vector3.new(-96,-9,134),  target=Vector3.new(-25,45,14)},
+        {base="B", pad=Vector3.new(-47,-9,142),  target=Vector3.new(-19,18,14)},
+        {base="B", pad=Vector3.new(47,-9,124),   target=Vector3.new(-67,20,13)},
+        {base="A", pad=Vector3.new(-66,-9,-135), target=Vector3.new(44,39,-14)},
+        {base="A", pad=Vector3.new(-24,-9,-159), target=Vector3.new(70,19,-13)},
+        {base="A", pad=Vector3.new(-43,-9,-147), target=Vector3.new(72,34,-13)},
+        {base="A", pad=Vector3.new(12,-9,-160),  target=Vector3.new(23,25,-14)},
+        {base="A", pad=Vector3.new(46,-9,-184),  target=Vector3.new(-5,110,-14)},
+        {base="A", pad=Vector3.new(76,-9,-160),  target=Vector3.new(6,74,-14)},
+        {base="A", pad=Vector3.new(28,-9,-178),  target=Vector3.new(11,65,-14)},
+        {base="A", pad=Vector3.new(96,-9,-134),  target=Vector3.new(25,45,-14)},
+        {base="A", pad=Vector3.new(47,-9,-142),  target=Vector3.new(19,18,-14)},
+        {base="A", pad=Vector3.new(-47,-9,-124), target=Vector3.new(67,20,-13)},
+    },
+    Rin = {
+        {base="B", pad=Vector3.new(62,-9,121),   target=Vector3.new(-29,-9,38)},
+        {base="B", pad=Vector3.new(35,-9,150),   target=Vector3.new(-26,-9,50)},
+        {base="B", pad=Vector3.new(0,-9,161),    target=Vector3.new(-33,39,14)},
+        {base="B", pad=Vector3.new(-28,-9,154),  target=Vector3.new(-16,28,14)},
+        {base="B", pad=Vector3.new(-56,-9,135),  target=Vector3.new(-28,10,14)},
+        {base="B", pad=Vector3.new(21,-9,161),   target=Vector3.new(-40,-6,13)},
+        {base="B", pad=Vector3.new(-107,-9,113), target=Vector3.new(-89,-9,90)},
+        {base="B", pad=Vector3.new(-133,-9,102), target=Vector3.new(-27,0,15)},
+        {base="B", pad=Vector3.new(-78,-9,128),  target=Vector3.new(-27,9,17)},
+        {base="B", pad=Vector3.new(50,-9,135),   target=Vector3.new(-44,-3,13)},
+        {base="A", pad=Vector3.new(-62,-9,-121), target=Vector3.new(29,-9,-38)},
+        {base="A", pad=Vector3.new(-35,-9,-150), target=Vector3.new(26,-9,-50)},
+        {base="A", pad=Vector3.new(0,-9,-161),   target=Vector3.new(33,39,-14)},
+        {base="A", pad=Vector3.new(28,-9,-154),  target=Vector3.new(16,28,-14)},
+        {base="A", pad=Vector3.new(56,-9,-135),  target=Vector3.new(28,10,-14)},
+        {base="A", pad=Vector3.new(-21,-9,-161), target=Vector3.new(40,-6,-13)},
+        {base="A", pad=Vector3.new(107,-9,-113), target=Vector3.new(89,-9,-90)},
+        {base="A", pad=Vector3.new(133,-9,-102), target=Vector3.new(27,0,-15)},
+        {base="A", pad=Vector3.new(78,-9,-128),  target=Vector3.new(27,9,-17)},
+        {base="A", pad=Vector3.new(-50,-9,-135), target=Vector3.new(44,-3,-13)},
+    },
+    RinFlow = {
+        {base="B", pad=Vector3.new(-134,-9,266), target=Vector3.new(-73,-9,74)},
+        {base="B", pad=Vector3.new(51,-9,237),   target=Vector3.new(-87,34,13)},
+        {base="B", pad=Vector3.new(-189,-9,192), target=Vector3.new(-65,24,13)},
+        {base="B", pad=Vector3.new(111,-9,187),  target=Vector3.new(-116,16,13)},
+        {base="A", pad=Vector3.new(134,-9,-266), target=Vector3.new(73,-9,-74)},
+        {base="A", pad=Vector3.new(-51,-9,-237), target=Vector3.new(87,34,-13)},
+        {base="A", pad=Vector3.new(189,-9,-192), target=Vector3.new(65,24,-13)},
+        {base="A", pad=Vector3.new(-111,-9,-187),target=Vector3.new(116,16,-13)},
+    },
+}
+
+local function copyLineupCode()
+    local char = myChar()
+    if not (char and char:FindFirstChild("HumanoidRootPart")) then return end
+    local r = char.HumanoidRootPart
+    local cam = Workspace.CurrentCamera
+    local vp = cam.ViewportSize
+    local ray = cam:ViewportPointToRay(vp.X / 2, vp.Y / 2)
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = {char}
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    local res = Workspace:Raycast(ray.Origin, ray.Direction * 5000, params)
+    if not res then return end
+    local map = Workspace:FindFirstChild("map")
+    if not map then return end
+    local ag, bg = map:FindFirstChild("Agoal"), map:FindFirstChild("Bgoal")
+    if not (ag and bg) then return end
+    local dA = (r.Position - ag.Position).Magnitude
+    local dB = (r.Position - bg.Position).Magnitude
+    local useA = dA <= dB
+    local goalPos = useA and ag.Position or bg.Position
+    local to = res.Position - goalPos
+    local po = r.Position - goalPos
+    local function rnd(n) return math.round(n) end
+    local code = string.format("t(%d,%d,%d)p(%d,%d,%d)%s",
+        rnd(to.X), rnd(to.Y), rnd(to.Z), rnd(po.X), rnd(po.Y), rnd(po.Z), useA and "a" or "b")
+    setclipboard(code)
+    StarterGui:SetCore("SendNotification", { Title = "Lineup Code", Text = code, Duration = 5 })
+end
+local function loadLineupCodes(text)
+    clearAllPads()
+    local map = Workspace:FindFirstChild("map")
+    if not map then return end
+    local ag, bg = map:FindFirstChild("Agoal"), map:FindFirstChild("Bgoal")
+    if not (ag and bg) then return end
+    local colors = {
+        Color3.fromRGB(255,0,0), Color3.fromRGB(255,128,0), Color3.fromRGB(255,255,0),
+        Color3.fromRGB(0,255,0), Color3.fromRGB(0,0,255), Color3.fromRGB(128,0,255),
+        Color3.fromRGB(255,0,255), Color3.fromRGB(128,255,0), Color3.fromRGB(120,72,0),
+        Color3.fromRGB(255,255,255), Color3.fromRGB(0,0,0),
+    }
+    local i = 0
+    for tx, ty, tz, px, py, pz, gl in text:gmatch("t%((%-?[%d%.]+),(%-?[%d%.]+),(%-?[%d%.]+)%)p%((%-?[%d%.]+),(%-?[%d%.]+),(%-?[%d%.]+)%)([ab])") do
+        local goalPos = gl == "a" and ag.Position or bg.Position
+        local off_t = Vector3.new(tonumber(tx), tonumber(ty), tonumber(tz))
+        local off_p = Vector3.new(tonumber(px), tonumber(py) - 3, tonumber(pz))
+        local col = colors[(i % #colors) + 1]
+        makePad(goalPos + off_p, col)
+        makeTarget(goalPos + off_t, col)
+        i = i + 1
+    end
+    StarterGui:SetCore("SendNotification", { Title = "Lines Loaded", Text = tostring(i) .. " created.", Duration = 5 })
+end
+
+-- ============================================================
+--  Goal Farm
+-- ============================================================
+local goalFarm = { enabled = false, mode = "Solo Farm", stopAt = nil, conn = nil, cfConn = nil, lastTeam = "B", switching = false, lastReset = 0 }
+local function checkScoreCondition()
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    local hb = pg and pg:FindFirstChild("Hotbar")
+    local h = hb and hb:FindFirstChild("Home")
+    local a = hb and hb:FindFirstChild("Away")
+    if h and a then
+        local hg = tonumber(string.match(h.Text, ":%s*(%d+)")) or 0
+        local ag = tonumber(string.match(a.Text, "(%d+)%s*:")) or 0
+        if math.abs(hg - ag) >= 4 and not (hg >= 10 and ag >= 10) then
+            if os.clock() - goalFarm.lastReset >= 60 then return true end
+        end
+    end
+    return false
+end
+local function isInGame()
+    local c = myChar()
+    local s = c and c:FindFirstChild("state")
+    local ig = s and s:FindFirstChild("ingame")
+    return ig and ig.Value or false
+end
+local function goalFarmStep()
+    if not goalFarm.enabled then return end
+    if not pick then return end
+    local r = myRoot()
+    if r then
+        if (r.Position - Vector3.new(-371,13,-1599)).Magnitude <= 15 or
+           (r.Position - Vector3.new(-196,13,-1599)).Magnitude <= 15 then
+            if goalFarm.mode == "Solo Farm" then
+                if goalFarm.switching then return end
+                if checkScoreCondition() then
+                    goalFarm.switching = true
+                    goalFarm.lastReset = os.clock()
+                    task.spawn(function()
+                        local ch = myChar()
+                        if ch then
+                            local hum = ch:FindFirstChildOfClass("Humanoid")
+                            if hum then hum.Health = 0 end
+                        end
+                        task.wait(8)
+                        goalFarm.lastTeam = (goalFarm.lastTeam == "A") and "B" or "A"
+                        fireRaw(pick .. "\001\001\000" .. goalFarm.lastTeam)
+                        goalFarm.switching = false
+                    end)
+                    return
+                end
+                fireRaw(pick .. "\001\001\000" .. goalFarm.lastTeam)
+            else
+                fireRaw(pick .. "\001\001\000A")
+                fireRaw(pick .. "\001\001\000B")
+            end
+        end
+    end
+    if not isInGame() then return end
+    disableCollisions()
+    local ball = Workspace.Terrain:FindFirstChild("Ball")
+    if ball and not holder() and r then
+        task.wait(0.5)
+        r.CFrame = CFrame.new(ball.Position.X, 0, ball.Position.Z)
+    end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            local ob = p.Character:FindFirstChild("Ball")
+            local oroot = p.Character:FindFirstChild("HumanoidRootPart")
+            if ob and oroot and r then
+                task.wait(0.5)
+                r.CFrame = ob.CFrame
+                fireBase({{"tackle"}})
+            end
+        end
+    end
+    if iHaveBall() then
+        local team = teamOf(myChar())
+        local map = Workspace:FindFirstChild("map")
+        local goal = map and map:FindFirstChild(team == "A" and "Bgoal" or "Agoal")
+        if goal and r then
+            task.wait(0.75)
+            r.CFrame = goal.CFrame
+            task.wait(0.175)
+            fireBase({{"kick", 50, false, vector.create(0,1,0)}})
+        end
+    end
+end
+local function startGoalFarm()
+    if goalFarm.enabled then return end
+    goalFarm.enabled = true
+    goalFarm.cfConn = LocalPlayer.CharacterAdded:Connect(function()
+        task.wait(1)
+        if goalFarm.enabled then pcall(goalFarmStep) end
+    end)
+    track(goalFarm.cfConn)
+    goalFarm.conn = RunService.RenderStepped:Connect(function() pcall(goalFarmStep) end)
+    task.spawn(function()
+        local ls = LocalPlayer:WaitForChild("leaderstats", 10)
+        local goals = ls and ls:FindFirstChild("goals")
+        while goalFarm.enabled and goals do
+            task.wait(1)
+            if goalFarm.stopAt and goals.Value >= goalFarm.stopAt then
+                goalFarm.enabled = false
+                if goalFarm.conn then goalFarm.conn:Disconnect() goalFarm.conn = nil end
+                StarterGui:SetCore("SendNotification", { Title = "Goal Farm", Text = "Target reached.", Duration = 3 })
+                return
+            end
+        end
+    end)
+end
+local function stopGoalFarm()
+    goalFarm.enabled = false
+    if goalFarm.conn then goalFarm.conn:Disconnect() goalFarm.conn = nil end
+    if goalFarm.cfConn then goalFarm.cfConn:Disconnect() goalFarm.cfConn = nil end
+end
+
+-- ============================================================
+--  Instant Disconnect
+-- ============================================================
+local disconnectLimit, disconnectEnabled = nil, false
+track(RunService.RenderStepped:Connect(function()
+    if disconnectEnabled and disconnectLimit and #Players:GetPlayers() > disconnectLimit then
+        LocalPlayer:Kick("Disconnected.")
+    end
+end))
+
+-- ============================================================
+--  Emotes
+-- ============================================================
+local function playEmote(animId, soundId, soundProps, loop)
+    local char = myChar()
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local animator = hum and hum:FindFirstChildOfClass("Animator")
+    if not (hum and animator) then return end
+    local anim = Instance.new("Animation")
+    anim.AnimationId = animId
+    local trackAnim = animator:LoadAnimation(anim)
+    trackAnim:Play()
+    if soundId then
+        local s = Instance.new("Sound")
+        s.Name = "EmoteSound"
+        s.SoundId = soundId
+        s.Looped = loop and true or false
+        for k, v in pairs(soundProps or {}) do s[k] = v end
+        s.Parent = SoundService
+        s:Play()
+        return s
+    end
+end
+local function stopEmote()
+    local char = myChar()
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local animator = hum and hum:FindFirstChildOfClass("Animator")
+    if animator then
+        for _, t in ipairs(animator:GetPlayingAnimationTracks()) do t:Stop() end
+    end
+    local s = SoundService:FindFirstChild("EmoteSound")
+    if s then s:Stop() s:Destroy() end
+end
+
+-- ============================================================
+--  UI
+-- ============================================================
+local function buildUI()
+    local UI = TeekUI.new({ Title = "Azure Hub", Subtitle = "AZURE LATCH", Version = "v1" })
+
+    -- Shooting
+    local sh = UI:Tab("Shooting")
+    sh:Section("Shot Aimbot")
+    sh:Toggle("Shot Aimbot", Config.Aimbot, function(v) Config.Aimbot = v end)
+    sh:Label("Shoot like normal - the shot goes at the enemy goal wherever you're facing.")
+    sh:Dropdown("Aim Spot", { "Away From Keeper", "Left Corner", "Right Corner", "Center" }, Config.AimSpot, function(v) Config.AimSpot = v end)
+    sh:Slider("Shot Height", 0, 45, Config.AimHeight, function(v) Config.AimHeight = v end)
+    sh:Toggle("Always Full Power", Config.FullPower, function(v) Config.FullPower = v end)
+    sh:Toggle("No Curve", Config.NoCurve, function(v) Config.NoCurve = v end)
+    sh:Toggle("Auto Shoot", Config.AutoShoot, function(v) Config.AutoShoot = v end)
+    sh:Slider("Shoot Range", 30, 150, Config.ShootRange, function(v) Config.ShootRange = v end)
+    sh:Section("Session")
+    local sShots = sh:Stat("Aimed Shots", "0")
+
+    -- Ball
+    local bl = UI:Tab("Ball")
+    bl:Section("Ball")
+    bl:Toggle("Ball Reach", Config.Reach, function(v) Config.Reach = v end)
+    bl:Slider("Reach", 7, 25, Config.ReachSize, function(v) Config.ReachSize = v end)
+    bl:Toggle("Ball Magnet", Config.Magnet, function(v) Config.Magnet = v end)
+    bl:Slider("Magnet Range", 5, 60, Config.MagnetRange, function(v) Config.MagnetRange = v end)
+    bl:Section("Auto")
+    bl:Toggle("Auto Tackle", Config.AutoTackle, function(v) Config.AutoTackle = v end)
+    bl:Slider("Tackle Range", 4, 20, Config.TackleRange, function(v) Config.TackleRange = v end)
+    bl:Toggle("Auto Dribble", Config.AutoDribble, function(v) Config.AutoDribble = v end)
+    bl:Slider("Dribble Range", 4, 20, Config.DribbleRange, function(v) Config.DribbleRange = v end)
+    bl:Toggle("Auto Pass", Config.AutoPass, function(v) Config.AutoPass = v end)
+    bl:Slider("Pass Power", 29, 95, Config.PassPower, function(v) Config.PassPower = v end)
+    bl:Section("Extras")
+    bl:Toggle("Steal Ball", Config.AutoStealBall, function(v) setSteal(v, "tackle") end)
+    bl:Toggle("Steal Ball (Aiku)", Config.AutoStealAiku, function(v) setSteal(v, "skill2") end)
+    bl:Toggle("Auto Goal", Config.AutoGoal, function(v) if v then startAutoGoal() else stopAutoGoal() end end)
+    bl:Toggle("Goal Farm", Config.GoalFarm, function(v) if v then startGoalFarm() else stopGoalFarm() end end)
+    bl:Dropdown("Farm Mode", {"Solo Farm", "Alt Farm (FAST)"}, "Solo Farm", function(v) goalFarm.mode = v end)
+    bl:Textbox("Farm Target", "Stop at this goals count.", function(t)
+        local n = tonumber(t)
+        goalFarm.stopAt = n or nil
+    end)
+    bl:Button("Break Ball", "Teleport extremely high.", breakBallPlayer)
+    bl:Button("Break Ball (Alt)", "Teleport + Space.", breakBallBall)
+    bl:Button("Break Ball (Permanent)", "Void the character.", permBreakBall)
+    bl:Button("Clear Dupe Balls", "Remove loose duplicate Ball MeshParts.", function()
+        for _, obj in ipairs(Workspace.Terrain:GetDescendants()) do
+            if obj:IsA("MeshPart") and obj.Name == "Ball" then obj:Destroy() end
+        end
+    end)
+
+    -- Goalkeeper
+    local gk = UI:Tab("Goalkeeper")
+    gk:Section("Auto GK")
+    gk:Button("Auto GK (Main)", "Toggle on. Reset to disable.", function() startAutoGK() end)
+    gk:Button("Auto GK (Alt)", "Pick mode. F4 or reset to disable.", function() startAltGK() end)
+    gk:Button("GK Anywhere", "hookfunction checkGK. Rejoin to disable.", gkAnywhere)
+    gk:Button("GK Catch", "Remote loadstring.", function()
+        pcall(function() loadstring(game:HttpGet("https://pastebin.com/raw/Hr1HnK38"))() end)
+    end)
+    gk:Section("Position")
+    gk:Toggle("Pick GK", Config.AutoPickGK, function(v)
+        Config.AutoPickGK = v
+        if v then pickGKFn() end
+    end)
+    gk:Toggle("Pick CF", Config.AutoPickCF, function(v)
+        Config.AutoPickCF = v
+        if v then pickCFFn() end
+    end)
+    gk:Section("Collision")
+    gk:Toggle("No Goal Walls", Config.BlatantMode, function(v)
+        Config.BlatantMode = v
+        if v then startBlatant() else stopBlatant() end
+    end)
+
+    -- Visuals
+    local vs = UI:Tab("Visuals")
+    vs:Section("ESP")
+    vs:Toggle("Iframe Text", Config.IframeESP, function(v) Config.IframeESP = v end)
+    vs:Toggle("Iframe Dot", Config.IframeDotESP, function(v) Config.IframeDotESP = v end)
+    vs:Toggle("Ball ESP", Config.BallESP, function(v) Config.BallESP = v end)
+    vs:Toggle("Team Highlight", Config.TeamHighlight, function(v) Config.TeamHighlight = v applyTeamHighlight() end)
+
+    -- Blatant
+    local bt = UI:Tab("Blatant")
+    bt:Section("Kick")
+    bt:Toggle("Max Power Kick", Config.MaxPowerKick, function(v)
+        Config.MaxPowerKick = v
+        kickHard = v
+        if v then installKickHook() end
+    end)
+    bt:Section("QTE")
+    bt:Toggle("Auto QTE", Config.AutoQTE, function(v) qteEnabled = v end)
+    bt:Section("Formless")
+    bt:Toggle("Auto Formless", Config.AutoFormless, function(v) Config.AutoFormless = v setFormless(v) end)
+    bt:Textbox("Formless Key", "e.g. Y, V, L.", function(t)
+        local ok, kc = pcall(function() return Enum.KeyCode[t:gsub("%s+","")] end)
+        if ok and kc then formlessBind = kc end
+    end)
+    bt:Section("Air Dribble")
+    bt:Toggle("Air Dribble", Config.AirDribble, function(v) Config.AirDribble = v setAir(v) end)
+    bt:Textbox("Air Dribble Key", "e.g. E, Q, LeftAlt.", function(t)
+        local ok, kc = pcall(function() return Enum.KeyCode[t:gsub("%s+","")] end)
+        if ok and kc then airBind = kc end
+    end)
+
+    -- Move Buffs
+    local bf = UI:Tab("Move Buffs")
+    bf:Section("Basics")
+    bf:Slider("Tackle", 0, 75, 0, function(v) Distances.tackleDist = v end)
+    bf:Slider("Rush", 0, 75, 0, function(v) Distances.rushDist = v end)
+    bf:Slider("GK Dive", 0, 75, 0, function(v) Distances.gkDist = v end)
+    bf:Section("Characters")
+    for _, entry in ipairs({
+        {"Naruhaya","naruhayaDist",200},
+        {"Raumdeuter","raumDist",200},
+        {"Draconic Rush","dracDist",200},
+        {"Step Overs","stepDist",200},
+        {"Off The Ball","kaiserDist",200},
+        {"Occlusion Break","occlusionDist",200},
+        {"Diving Header","divingDist",125},
+        {"Reflex Tackle","reflexDist",125},
+        {"Razor Break","razorDist",35},
+        {"Drag Scissors","dragDist",100},
+        {"Hero's Instinct","instinctDist",300},
+        {"Zombie Dribble","zombDist",250},
+        {"Beautiful Destruction","beautifulDist",33},
+        {"Beautiful (Side)","creativeDist",25},
+        {"Nutmeg Reflex","reflexNutmegDist",50},
+        {"King's Path","kingsDist",750},
+        {"Devour","devourMaxDist",500},
+        {"Control (Ground)","controlVarDist",30},
+        {"Mach Cut-In","machDist",200},
+        {"Golden Zone","goldenDist",400},
+        {"Twin Steps","twinStepsDist",75},
+        {"Glacial Cut","glacialDist",175},
+        {"Close Quarter","quarterDist",250},
+        {"Go-Go","gogoDist",100},
+        {"Guard Dog","guardDist",100},
+        {"Speedy Turn","speedyDist",250},
+        {"Fetch","fetchDist",100},
+        {"Silent Steal","silentDist",125},
+        {"Corvine","corvineDist",100},
+        {"Kusarigama","kusarDist",75},
+        {"Shadow Step","shadowDist",50},
+    }) do
+        bf:Slider(entry[1], 0, entry[3], 0, function(v) Distances[entry[2]] = v end)
+    end
+
+    -- Auto
+    local au = UI:Tab("Auto")
+    au:Section("Auto Move")
+    au:Toggle("Auto Move", "Fires a skill when ball is close.", function(v) autoAct.toggle = v end)
+    au:Textbox("Move #", "1-5.", function(t)
+        local n = tonumber(t)
+        if n and n >= 1 and n <= 5 then autoAct.move = n end
+    end)
+    au:Slider("Move Range", 3, 70, 10, function(v) autoAct.distance = v end)
+    au:Slider("Ball Height", 0, 50, 0, function(v) autoAct.minHeight = v end)
+    au:Dropdown("Move Mode", {"Hold", "Toggle"}, "Hold", function(v) autoAct.mode = v end)
+    au:Section("Line Up")
+    au:Dropdown("Lineup Mode", {"Freeze", "Slowness"}, "Freeze", function(v)
+        currentLineupMode = v
+        resetLineupPhysics()
+    end)
+    au:Toggle("Sae Lines", function(s) clearAllPads() if s then loadLineUps(LINEUPS.Sae) end end)
+    au:Toggle("Kaiser Lines", function(s) clearAllPads() if s then loadLineUps(LINEUPS.Kaiser) end end)
+    au:Toggle("Yukimiya Lines", function(s) clearAllPads() if s then loadLineUps(LINEUPS.Yukimiya) end end)
+    au:Toggle("Karasu Lines", function(s) clearAllPads() if s then loadLineUps(LINEUPS.Karasu) end end)
+    au:Toggle("Rin Lines", function(s) clearAllPads() if s then loadLineUps(LINEUPS.Rin) end end)
+    au:Toggle("Rin Flow Lines", function(s) clearAllPads() if s then loadLineUps(LINEUPS.RinFlow) end end)
+    au:Button("Copy Line", "Copy a lineup from your current position.", copyLineupCode)
+    au:Textbox("Load Line", "Paste one or more codes.", function(t) loadLineupCodes(t) end)
+
+    -- Misc
+    local ms = UI:Tab("Misc")
+    ms:Section("Codes")
+    ms:Button("Redeem Codes", true, function() task.spawn(function()
+        local CODES = { "TIMOTHYISHEREFORNAGI", "KAISERISNEXTWEEKNOWORRIES", "MAYBE", "BAROUTSPECIAL", "BROTHERNOAH", "MYANIMEFANSMAN" }
+        if not (packets and packets.bytenet_useCode) then return end
+        for _, c in ipairs(CODES) do
+            if not HubAlive then return end
+            pcall(packets.bytenet_useCode.send, c)
+            task.wait(3.2)
+        end
+    end) end)
+    ms:Label("Join group 35316274 first.")
+    ms:Section("Dubs")
+    ms:Toggle("All Dubs", false, function(v)
+        local st = LocalPlayer:FindFirstChild("setting")
+        if not st then return end
+        for _, n in ipairs({
+            "dub_yukimiya","dubVoicelines","britishaikuevil","dub_barou","dub_chigiri",
+            "dub_donlorenzo","dub_gagamaru","dub_isagi","dub_kaiser","dub_karasu",
+            "dub_kunigami","dub_masterylorenzo","dub_nagi","dub_otoya","dub_rin",
+            "dub_sae","dub_what"
+        }) do
+            local b = st:FindFirstChild(n)
+            if b and b:IsA("BoolValue") then b.Value = v end
+        end
+    end)
+    ms:Section("Cutscene")
+    ms:Toggle("No Cutscene", Config.NoCutscene, function(v)
+        Config.NoCutscene = v
+        local tempFolder = SoundService:FindFirstChild("azuretemp") or Instance.new("Folder", SoundService)
+        tempFolder.Name = "azuretemp"
+        local crowd = SoundService:FindFirstChild("football-crowd-3-69245")
+        if v and crowd then
+            local clone = crowd:Clone()
+            clone.Parent = tempFolder
+            crowd:Stop()
+            crowd:Destroy()
+        elseif not v then
+            local stored = tempFolder:FindFirstChild("football-crowd-3-69245")
+            if stored then stored.Parent = SoundService stored:Play() end
+        end
+    end)
+    ms:Section("Server")
+    ms:Button("Private Server", "Teleport to 11v11 private place.", function()
+        pcall(function() TeleportService:Teleport(85946466968831, LocalPlayer) end)
+    end)
+    ms:Textbox("Kick At #", "Kick when players exceed this.", function(t)
+        disconnectLimit = tonumber(t)
+    end)
+    ms:Toggle("Auto Kick", false, function(v) disconnectEnabled = v end)
+    ms:Section("Emotes")
+    ms:Toggle("Toosie", false, function(v)
+        if v then playEmote("rbxassetid://95959941666543", "rbxassetid://1845341094", {}, true)
+        else stopEmote() end
+    end)
+    ms:Toggle("Sae Pose", false, function(v)
+        if v then playEmote("rbxassetid://136812327261825", "rbxassetid://1843404009", {}, true)
+        else stopEmote() end
+    end)
+    ms:Toggle("Assumptions", false, function(v)
+        if v then
+            local s = playEmote("rbxassetid://108778663919542", "rbxassetid://137023124734348", { PlaybackSpeed = 0.17, Volume = 0.6 }, true)
+            if s then
+                local eq = Instance.new("EqualizerSoundEffect")
+                eq.LowGain = 10 eq.MidGain = 0 eq.HighGain = 4 eq.Parent = s
+            end
+        else stopEmote() end
+    end)
+    ms:Button("Akuma", function() playEmote("rbxassetid://111005363990501", "rbxassetid://133370927301258", { Volume = 10 }, false) end)
+    ms:Button("Cartoon Fall", function()
+        local char = myChar()
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not hum then return end
+        local anim = Instance.new("Animation")
+        anim.AnimationId = "rbxassetid://98064370044269"
+        hum:LoadAnimation(anim):Play()
+        local ids = { "rbxassetid://8663054927", "rbxassetid://4979513906" }
+        local s = Instance.new("Sound")
+        s.Volume = 10
+        s.Parent = SoundService
+        local i = 1
+        local function nextS()
+            if i <= #ids then
+                s.SoundId = ids[i]
+                s:Play()
+                s.Ended:Connect(function() i = i + 1 nextS() end)
+            else s:Destroy() end
+        end
+        nextS()
+    end)
+    ms:Button("Spit", function() playEmote("rbxassetid://97257010665720", "rbxassetid://18111052648", { Volume = 2 }, false) end)
+    ms:Section("External")
+    ms:Button("IY", function()
+        pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source"))() end)
+    end)
+    ms:Section("Mobile Buttons")
+    ms:Button("Make Key Button", "Uses the key from the field below.", function()
+        local key = (getgenv().AzureMobileKey or "")
+        if key == "" then return end
+        local sg = Instance.new("ScreenGui")
+        sg.Name = "MobileKey_" .. key
+        sg.ResetOnSpawn = false
+        sg.Parent = LocalPlayer:WaitForChild("PlayerGui")
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, 60, 0, 60)
+        btn.Position = UDim2.new(0.5, math.random(-150,150), 0.5, math.random(-150,150))
+        btn.AnchorPoint = Vector2.new(0.5, 0.5)
+        btn.BackgroundColor3 = Color3.fromRGB(15,15,15)
+        btn.Text = key
+        btn.TextColor3 = Color3.fromRGB(220,220,220)
+        btn.TextTransparency = 0.4
+        btn.Font = Enum.Font.GothamSemibold
+        btn.TextSize = 20
+        btn.Parent = sg
+        local cr = Instance.new("UICorner") cr.CornerRadius = UDim.new(0,8) cr.Parent = btn
+        btn.Activated:Connect(function()
+            VirtualInputManager:SendKeyEvent(true, key, false, game)
+            task.wait()
+            VirtualInputManager:SendKeyEvent(false, key, false, game)
+        end)
+        local dragging, dragInput, dragStart, startPos
+        btn.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = input.Position
+                startPos = btn.Position
+            end
+        end)
+        btn.InputChanged:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+                dragInput = input
+            end
+        end)
+        UserInputService.InputChanged:Connect(function(input)
+            if input == dragInput and dragging then
+                local d = input.Position - dragStart
+                btn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            end
+        end)
+    end)
+    ms:Textbox("Key", "e.g. LeftAlt.", function(t)
+        getgenv().AzureMobileKey = t:gsub("%s+","")
+    end)
+    ms:Button("Formless Button", function()
+        local sg = Instance.new("ScreenGui")
+        sg.Name = "FormlessMobile"
+        sg.ResetOnSpawn = false
+        sg.Parent = LocalPlayer:WaitForChild("PlayerGui")
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, 60, 0, 60)
+        btn.Position = UDim2.new(0.5, -50, 0.5, -50)
+        btn.AnchorPoint = Vector2.new(0.5, 0.5)
+        btn.BackgroundColor3 = Color3.fromRGB(15,15,15)
+        btn.Text = "Formless"
+        btn.TextColor3 = Color3.fromRGB(220,220,220)
+        btn.Font = Enum.Font.GothamSemibold
+        btn.TextSize = 20
+        btn.Parent = sg
+        local cr = Instance.new("UICorner") cr.CornerRadius = UDim.new(0,8) cr.Parent = btn
+        btn.Activated:Connect(function() pcall(formlessTrigger) end)
+    end)
+    ms:Button("Air Dribble Button", function()
+        local sg = Instance.new("ScreenGui")
+        sg.Name = "AirMobile"
+        sg.ResetOnSpawn = false
+        sg.Parent = LocalPlayer:WaitForChild("PlayerGui")
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, 60, 0, 60)
+        btn.Position = UDim2.new(0.5, -50, 0.5, 40)
+        btn.AnchorPoint = Vector2.new(0.5, 0.5)
+        btn.BackgroundColor3 = Color3.fromRGB(15,15,15)
+        btn.Text = "Air"
+        btn.TextColor3 = Color3.fromRGB(220,220,220)
+        btn.Font = Enum.Font.GothamSemibold
+        btn.TextSize = 20
+        btn.Parent = sg
+        local cr = Instance.new("UICorner") cr.CornerRadius = UDim.new(0,8) cr.Parent = btn
+        btn.Activated:Connect(function() pcall(airKick) end)
+    end)
+
+    -- Teleports
+    local tp = UI:Tab("Teleports")
+    tp:Button("Midfield", function() local r = myRoot() if r then r.CFrame = CFrame.new(-540, 3, 1274) end end)
+    tp:Button("Commentator", function() local r = myRoot() if r then r.CFrame = CFrame.new(-6, 2, 3237) end end)
+    tp:Button("Goal A", function() local r = myRoot() if r then r.CFrame = CFrame.new(-537, 3, 1575) end end)
+    tp:Button("Goal B", function() local r = myRoot() if r then r.CFrame = CFrame.new(-534, 3, 974) end end)
+
+    -- Hub
+    local hb = UI:Tab("Hub")
+    hb:Button("Unload", false, function()
+        task.delay(0.3, function() if _G.AzureHubUnload then pcall(_G.AzureHubUnload) end end)
+    end)
+
+    UI:Boot({ "reading the pitch", "ready" })
+
+    local acc = 0
+    track(RunService.Heartbeat:Connect(function(dt)
+        acc += dt
+        if acc < 0.5 then return end
+        acc = 0
+        pcall(function() sShots.Set(tostring(Aim.shots)) end)
+    end))
+
+    return UI
+end
+
+pcall(TeekConfig.init, "AzureLatch")
+TeekConfig.register("main", Config)
+TeekConfig.register("ops", TeekOps.Persist)
+pcall(TeekConfig.autoload)
+pcall(TeekConfig.enableAutosave, 15)
+pcall(TeekOps.restore)
+
+TeekOps.check("Packets", TeekOps.RISK.CLIENT, function() return useSend ~= nil end)
+TeekOps.check("Client object", TeekOps.RISK.CLIENT, function() return client() ~= nil end)
+TeekOps.check("ByteNetReliable", TeekOps.RISK.CLIENT, function() return ByteNetReliable ~= nil end)
+TeekOps.check("Buffers", TeekOps.RISK.CLIENT, function() return buffers.base ~= nil end)
+TeekOps.check("Role", TeekOps.RISK.CLIENT, function() return pick ~= nil end)
+
+local gui = buildUI()
+
+pcall(function() getgenv().AzureDebug = {
+    Config = Config, Aim = Aim, Auto = Auto, client = client, aimPoint = aimPoint,
+    kickNow = kickNow, buffers = buffers, pick = pick, Distances = Distances,
+    goalFarm = goalFarm, autoGkState = autoGkState,
+} end)
+
+print("[AzureHub] Azure Latch loaded")
+
+_G.AzureHubUnload = function()
+    HubAlive = false
+    pcall(TeekConfig.stopAutosave)
+    if useSend then packets.bytenet_use.send = useSend end
+    applyReach()
+    stopAutoGoal()
+    stopAutoGK()
+    stopAltGK()
+    stopBlatant()
+    stopSteal()
+    stopGoalFarm()
+    setFormless(false)
+    setAir(false)
+    for _, c in CONNS do pcall(function() c:Disconnect() end) end
+    table.clear(CONNS)
+    for _, m in pairs(Marks) do pcall(function() m:Destroy() end) end
+    cleanTeamHighlight()
+    clearIframeDots()
+    clearAllPads()
+    pcall(function() if ballMark then ballMark:Destroy() end end)
+    pcall(function() if autoActGui then autoActGui:Destroy() end end)
+    pcall(function() if gui and gui.Destroy then gui:Destroy() end end)
+    _G.AzureHubUnload = nil
+end
