@@ -26,9 +26,9 @@ local CONNS = {}
 local function track(c) if c then table.insert(CONNS, c) end return c end
 
 local Config = {
-    Aimbot = true, AimSpot = "Away From Keeper", AimHeight = 12, FullPower = true, NoCurve = true,
+    Aimbot = true, AimSpot = "Away From Keeper", AimHeight = 12, FullPower = false, NoCurve = true,
+    ShotPower = 5,
     Reach = false, ReachSize = 25,
-    Magnet = false, MagnetRange = 30,
     AutoTackle = false, TackleRange = 9,
     AutoDribble = false, DribbleRange = 10,
     AutoPass = false, PassPower = 55,
@@ -61,7 +61,7 @@ end
 if not WindUI then error("[AzureHub] WindUI failed to load.") end
 
 -- ============================================================
---  Shim: positional TeekUI-style calls -> WindUI table API
+--  Shim: positional calls -> WindUI table API
 -- ============================================================
 local function noop() end
 
@@ -214,7 +214,6 @@ local function myRoot() local c = myChar() return c and c:FindFirstChild("Humano
 local function teamOf(ch) local s = ch and ch:FindFirstChild("state") return s and s:FindFirstChild("team") and s.team.Value or nil end
 local function holder() return RSW and RSW:FindFirstChild("ballHolder") and RSW.ballHolder.Value end
 local function iHaveBall() return holder() ~= nil and holder() == myChar() end
-local function looseBall() local c = ReplicatedStorage:FindFirstChild("CFBall") return c and c.Value.Position end
 local function onPitch() local t = teamOf(myChar()) return t == "A" or t == "B" end
 
 local Client
@@ -305,6 +304,10 @@ local function aimPoint()
     elseif Config.AimSpot == "Away From Keeper" then side = (gr and gr.Position.X > goal.Position.X) and -1 or 1 end
     return goal.Position + Vector3.new(side * half, 0, 0)
 end
+local function shotPowerValue()
+    local p = math.clamp(tonumber(Config.ShotPower) or 5, 1, 10)
+    return math.floor(29 + ((p - 1) / 9) * (95 - 29))
+end
 local function rewriteKick(a)
     local r = myRoot()
     if not r then return end
@@ -322,7 +325,11 @@ local function rewriteKick(a)
     if not tp then return end
     local flat = Vector3.new(tp.X - r.Position.X, 0, tp.Z - r.Position.Z).Unit
     a[4] = Vector3.new(flat.X, (tonumber(Config.AimHeight) or 12) / 100, flat.Z).Unit
-    if Config.FullPower then a[2] = 95 end
+    if Config.FullPower then
+        a[2] = 95
+    else
+        a[2] = shotPowerValue()
+    end
     if Config.NoCurve then a[3] = false end
     Aim.shots += 1
     Aim.last = Config.AimSpot
@@ -364,7 +371,7 @@ local function applyReach()
     end
 end
 
-local Auto = { tackleAt = 0, dribAt = 0, passAt = 0, magnetAt = 0, shootAt = 0, gap = setmetatable({}, { __mode = "k" }) }
+local Auto = { tackleAt = 0, dribAt = 0, passAt = 0, shootAt = 0, gap = setmetatable({}, { __mode = "k" }) }
 track(RunService.Heartbeat:Connect(function()
     if not HubAlive then return end
     applyReach()
@@ -372,14 +379,6 @@ track(RunService.Heartbeat:Connect(function()
     if not (r and onPitch()) then return end
     local now = os.clock()
     local mine = iHaveBall()
-
-    if Config.Magnet and not holder() and now - Auto.magnetAt > 0.25 then
-        local b = looseBall()
-        if b and (b - r.Position).Magnitude <= Config.MagnetRange and (b - r.Position).Magnitude > 3 then
-            Auto.magnetAt = now
-            r.CFrame = CFrame.new(b + Vector3.new(0, r.Position.Y - b.Y, 0)) * (r.CFrame - r.Position)
-        end
-    end
 
     if mine and Config.AutoShoot and now - Auto.shootAt > 1.5 then
         local tp = aimPoint()
@@ -1906,7 +1905,9 @@ local function buildUI()
     sh:Label("Shoot like normal - the shot goes at the enemy goal wherever you're facing.")
     sh:Dropdown("Aim Spot", { "Away From Keeper", "Left Corner", "Right Corner", "Center" }, Config.AimSpot, function(v) Config.AimSpot = v end)
     sh:Slider("Shot Height", 0, 45, Config.AimHeight, function(v) Config.AimHeight = v end)
-    sh:Toggle("Always Full Power", Config.FullPower, function(v) Config.FullPower = v end)
+    sh:Slider("Shot Power", 1, 10, Config.ShotPower, function(v) Config.ShotPower = v end)
+    sh:Label("1 = normal, 10 = really fast.")
+    sh:Toggle("Full Power (overrides slider)", Config.FullPower, function(v) Config.FullPower = v end)
     sh:Toggle("No Curve", Config.NoCurve, function(v) Config.NoCurve = v end)
     sh:Toggle("Auto Shoot", Config.AutoShoot, function(v) Config.AutoShoot = v end)
     sh:Slider("Shoot Range", 30, 150, Config.ShootRange, function(v) Config.ShootRange = v end)
@@ -1918,8 +1919,6 @@ local function buildUI()
     bl:Section("Ball")
     bl:Toggle("Ball Reach", Config.Reach, function(v) Config.Reach = v end)
     bl:Slider("Reach", 7, 25, Config.ReachSize, function(v) Config.ReachSize = v end)
-    bl:Toggle("Ball Magnet", Config.Magnet, function(v) Config.Magnet = v end)
-    bl:Slider("Magnet Range", 5, 60, Config.MagnetRange, function(v) Config.MagnetRange = v end)
     bl:Section("Auto")
     bl:Toggle("Auto Tackle", Config.AutoTackle, function(v) Config.AutoTackle = v end)
     bl:Slider("Tackle Range", 4, 20, Config.TackleRange, function(v) Config.TackleRange = v end)
@@ -2294,7 +2293,7 @@ local gui = buildUI()
 pcall(function() getgenv().AzureDebug = {
     Config = Config, Aim = Aim, Auto = Auto, client = client, aimPoint = aimPoint,
     kickNow = kickNow, buffers = buffers, pick = pick, Distances = Distances,
-    goalFarm = goalFarm, autoGkState = autoGkState,
+    goalFarm = goalFarm, autoGkState = autoGkState, shotPowerValue = shotPowerValue,
 } end)
 
 print("[AzureHub] Azure Latch loaded")
