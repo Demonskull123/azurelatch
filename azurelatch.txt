@@ -20,27 +20,12 @@ local CONNS = {}
 local function track(c) if c then table.insert(CONNS, c) end return c end
 
 local Persist = {
-    AutoGK = false,
-    GKMagnet = false,
-    NoGoalWalls = false,
-    AutoGoal = false,
-    GoalFarm = false,
-    StealBall = false,
-    StealBallAiku = false,
-    AutoFormless = false,
-    AirDribble = false,
-    AutoMove = false,
-    AllDubs = false,
-    AutoKick = false,
-    BallESP = false,
-    TeamHighlight = false,
-    Reach = false,
-    AutoTackle = false,
-    AutoDribble = false,
-    AutoPass = false,
-    AutoShoot = false,
-    MaxPowerKick = false,
-    AutoQTE = false,
+    AutoGK = false, GKMagnet = false, NoGoalWalls = false, AutoGoal = false,
+    GoalFarm = false, StealBall = false, StealBallAiku = false, AutoFormless = false,
+    AirDribble = false, AutoMove = false, AllDubs = false, AutoKick = false,
+    BallESP = false, TeamHighlight = false, Reach = false, AutoTackle = false,
+    AutoDribble = false, AutoPass = false, AutoShoot = false, MaxPowerKick = false,
+    AutoQTE = false, TackleWatch = false, TackleWatchMethod = "Move",
 }
 
 local Config = {
@@ -357,14 +342,20 @@ local function kickNow()
     return true
 end
 
-local REACH0 = wiki and wiki.ball_pickups and { player = wiki.ball_pickups.player, gk = wiki.ball_pickups.gk }
+local REACH0 = wiki and wiki.ball_pickups and { player = wiki.ball_pickups.player, gk = wiki.ball_pickups.gk, max = wiki.ball_pickups.max }
+local PlayerReachTarget = 25
+local GKReachTarget = 25
+
 local function applyReach()
     if not (wiki and wiki.ball_pickups and REACH0) then return end
-    local cap = tonumber(wiki.ball_pickups.max) or 25
-    if Config.Reach and HubAlive then
-        local v = math.clamp(tonumber(Config.ReachSize) or 25, REACH0.player, cap)
-        wiki.ball_pickups.player = v
-        wiki.ball_pickups.gk = math.max(v, REACH0.gk)
+    local hardCap = tonumber(REACH0.max) or 25
+    if HubAlive then
+        if Config.Reach then
+            wiki.ball_pickups.player = math.clamp(PlayerReachTarget, REACH0.player, hardCap)
+        else
+            wiki.ball_pickups.player = REACH0.player
+        end
+        wiki.ball_pickups.gk = math.clamp(math.max(PlayerReachTarget, GKReachTarget), REACH0.gk, hardCap)
     else
         wiki.ball_pickups.player, wiki.ball_pickups.gk = REACH0.player, REACH0.gk
     end
@@ -553,6 +544,18 @@ local function stopAutoGoal()
     if autoGoalState.conn then autoGoalState.conn:Disconnect() autoGoalState.conn = nil end
 end
 
+local function jumpOnce(hum)
+    if not hum then return end
+    pcall(function()
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+    end)
+    task.delay(0.05, function()
+        pcall(function()
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+        end)
+    end)
+end
+
 local autoGkState = { enabled = false, connections = {}, look = nil, pause = false, lastHolder = nil, gui = nil, lastJump = 0, lastTackle = 0, lagBurst = false }
 local function stopAutoGK()
     autoGkState.enabled = false
@@ -611,7 +614,7 @@ local function startAutoGK()
         return b
     end
 
-    local function predictgoalimpact(pos, vel, accel, goal)
+    local function predictGoalImpact(pos, vel, accel, goal)
         if not goal then return nil end
         local cf = goal.CFrame
         local normal = cf.LookVector
@@ -630,6 +633,10 @@ local function startAutoGK()
         local t1 = (-b - sd) / (2*a)
         local t2 = (-b + sd) / (2*a)
         return (t1 > 0 and t1) or (t2 > 0 and t2)
+    end
+
+    local function tackleOnce()
+        fireBase({{"tackle"}})
     end
 
     table.insert(autoGkState.connections, ballHolder.Changed:Connect(function(cur)
@@ -663,7 +670,7 @@ local function startAutoGK()
                 autoGkState.look.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(hr.Position.X, hrp.Position.Y, hr.Position.Z))
             end
             if (hrp.Position - hr.Position).Magnitude <= 35 then
-                fireBase({{"tackle"}})
+                tackleOnce()
             end
         elseif ball then
             local rawVel = ball.AssemblyLinearVelocity
@@ -699,22 +706,6 @@ local function startAutoGK()
             local map = Workspace:FindFirstChild("map")
             local goal = map and map:FindFirstChild(team == "A" and "Agoal" or "Bgoal")
 
-            local lead = fastBall and 0.12 or (midBall and 0.2 or 0.3)
-            lead = lead + math.clamp(ping, 0, 0.4)
-            local tImpact = predictgoalimpact(ball.Position, velSmooth, accel, goal)
-            local predicted
-            if tImpact then
-                predicted = ball.Position + velSmooth * tImpact + 0.5 * accel * tImpact * tImpact
-            else
-                predicted = ball.Position + velSmooth * lead + 0.5 * GRAVITY * lead * lead
-            end
-
-            if autoGkState.look then
-                autoGkState.look.Enabled = true
-                autoGkState.look.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(predicted.X, hrp.Position.Y, predicted.Z))
-                autoGkState.look.Responsiveness = fastBall and 4000 or (laggy and 2500 or 1800)
-            end
-
             local hrpFlat = Vector3.new(hrp.Position.X, 0, hrp.Position.Z)
             local ballFlat = Vector3.new(ball.Position.X, 0, ball.Position.Z)
             local toMe = hrpFlat - ballFlat
@@ -727,37 +718,63 @@ local function startAutoGK()
                 closingSpeed = velFlat:Dot(toMe.Unit)
             end
             local eta = closingSpeed > 0.5 and (flatDist / closingSpeed) or math.huge
+            local approaching = closingSpeed > 4 or flatDist < 10
+
+            local lead = fastBall and 0.12 or (midBall and 0.2 or 0.3)
+            lead = lead + math.clamp(ping, 0, 0.4)
+            local tImpact = predictGoalImpact(ball.Position, velSmooth, accel, goal)
+            local predicted
+            if tImpact and approaching then
+                predicted = ball.Position + velSmooth * tImpact + 0.5 * accel * tImpact * tImpact
+            elseif approaching then
+                predicted = ball.Position + velSmooth * lead + 0.5 * GRAVITY * lead * lead
+            else
+                predicted = ball.Position
+            end
+            local predOffset = predicted - ball.Position
+            if predOffset.Magnitude > 14 then
+                predicted = ball.Position + predOffset.Unit * 14
+            end
+
+            local goalDir
+            do
+                local myGoal = map and map:FindFirstChild(team == "A" and "Agoal" or "Bgoal")
+                local ahead = myGoal and myGoal.CFrame.LookVector or Vector3.new(0, 0, 1)
+                goalDir = Vector3.new(ahead.X, 0, ahead.Z)
+                if goalDir.Magnitude < 0.01 then goalDir = Vector3.new(0, 0, 1) end
+                goalDir = goalDir.Unit
+            end
+            local faceTarget
+            if approaching and closingSpeed > 5 then
+                faceTarget = Vector3.new(predicted.X, hrp.Position.Y, predicted.Z)
+            else
+                faceTarget = hrp.Position + goalDir * 10
+            end
+
+            if autoGkState.look then
+                autoGkState.look.Enabled = true
+                autoGkState.look.CFrame = CFrame.lookAt(hrp.Position, faceTarget)
+                autoGkState.look.Responsiveness = fastBall and 4000 or (laggy and 2500 or 1800)
+            end
 
             local incoming = flatDist <= (fastBall and 70 or (midBall and 62 or 55)) + (laggy and 20 or 0)
 
-            if incoming and (heightAbove > 2.5 or rising) then
+            if approaching and incoming and (heightAbove > 2.5 or rising) then
                 local bandLow = laggy and 1.5 or 2.5
                 local bandHigh = laggy and 20 or 15
                 local inBand = heightAbove > bandLow and heightAbove < bandHigh
                 local ballAboveFeet = ball.Position.Y > hrp.Position.Y - 2
-                if inBand and ballAboveFeet then                    local now2 = os.clock()
+                if inBand and ballAboveFeet then
+                    local now2 = os.clock()
                     local hs = hum:GetState()
-                    local grounded = hs == Enum.HumanoidStateType.Running
-                        or hs == Enum.HumanoidStateType.RunningNoPhysics
-                        or hs == Enum.HumanoidStateType.Landed
-                        or hs == Enum.HumanoidStateType.Seated
+                    local airborne = hs == Enum.HumanoidStateType.Jumping
+                        or hs == Enum.HumanoidStateType.Freefall
                     local cooldown = fastBall and 0.08 or (midBall and 0.12 or 0.15)
                     local rearm = fastBall and 0.18 or 0.28
-                    local canJump = grounded or (now2 - (autoGkState.lastJump or 0) > rearm)
-                    if canJump and now2 - (autoGkState.lastJump or 0) > cooldown then
-                        hum.Jump = true
+                    local since = now2 - (autoGkState.lastJump or 0)
+                    if since > cooldown and (not airborne or since > rearm) then
                         autoGkState.lastJump = now2
-                        task.spawn(function()
-                            local deadline = os.clock() + (fastBall and 0.15 or 0.22)
-                            repeat
-                                task.wait()
-                                local s = hum:GetState()
-                                if s == Enum.HumanoidStateType.Jumping or s == Enum.HumanoidStateType.Freefall then
-                                    return
-                                end
-                                hum.Jump = true
-                            until os.clock() > deadline
-                        end)
+                        jumpOnce(hum)
                     end
                 end
             end
@@ -765,11 +782,47 @@ local function startAutoGK()
             local tackleByDist = fastBall and 42 or (midBall and 38 or 35)
             if laggy then tackleByDist = tackleByDist + 15 end
             local tackleByTime = eta < (ping + 0.08)
-            if flatDist <= tackleByDist or (eta < 0.35 and closingSpeed > 30) or tackleByTime then
+            if approaching and (flatDist <= tackleByDist or (eta < 0.35 and closingSpeed > 30) or tackleByTime) then
                 if not autoGkState.lastTackle or os.clock() - autoGkState.lastTackle > 0.03 then
                     autoGkState.lastTackle = os.clock()
-                    fireBase({{"tackle"}})
+
+                    local toBallFlat = Vector3.new(ball.Position.X - hrp.Position.X, 0, ball.Position.Z - hrp.Position.Z)
+                    local toBallMag = toBallFlat.Magnitude
+                    local diveDir = "forward"
+                    if toBallMag > 0.01 then
+                        local fwd = goalDir
+                        local right = fwd:Cross(Vector3.new(0, 1, 0))
+                        local unit = toBallFlat / toBallMag
+                        local fwdDot = unit:Dot(fwd)
+                        local rightDot = unit:Dot(right)
+                        if fwdDot < -0.3 then
+                            diveDir = "back"
+                        elseif math.abs(rightDot) > math.abs(fwdDot) then
+                            diveDir = rightDot > 0 and "right" or "left"
+                        else
+                            diveDir = "forward"
+                        end
+                    end
+
+                    if diveDir ~= "back" then
+                        if autoGkState.look then
+                            local faceDir
+                            if diveDir == "forward" then
+                                faceDir = goalDir
+                            elseif diveDir == "left" then
+                                faceDir = goalDir:Cross(Vector3.new(0, 1, 0)) * -1
+                            else
+                                faceDir = goalDir:Cross(Vector3.new(0, 1, 0))
+                            end
+                            if faceDir and faceDir.Magnitude > 0.01 then
+                                autoGkState.look.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + faceDir.Unit * 10)
+                                task.wait(0.02)
+                            end
+                        end
+                        tackleOnce()
+                    end
                 end
+
                 if laggy then
                     if not autoGkState.lagBurst then
                         autoGkState.lagBurst = true
@@ -785,7 +838,7 @@ local function startAutoGK()
                                     local d2 = (Vector3.new(r2.Position.X, 0, r2.Position.Z) - Vector3.new(b2.Position.X, 0, b2.Position.Z)).Magnitude
                                     if d2 > 65 then autoGkState.lagBurst = false return end
                                 end)
-                                fireBase({{"tackle"}})
+                                tackleOnce()
                                 fireRaw(buffers.grabball)
                                 task.wait(0.05)
                             end
@@ -807,7 +860,7 @@ local function startAutoGK()
                 end
             end
 
-            if fastBall and flatDist <= 55 and not magnetBurstActive and not autoGkState.lagBurst then
+            if fastBall and approaching and flatDist <= 55 and not magnetBurstActive and not autoGkState.lagBurst then
                 magnetBurstActive = true
                 task.spawn(function()
                     local start = os.clock()
@@ -1175,6 +1228,79 @@ local DashConfigs = {
 }
 local Distances = {}
 for _, cfg in pairs(DashConfigs) do Distances[cfg.sliderVar] = 0 end
+
+local TackleWatch = {
+    Enabled = false,
+    Range = 8,
+    Cooldown = 0.6,
+    Last = 0,
+    Method = "Move",
+    Conns = {},
+    Watching = {},
+}
+
+local TackleAnimIds = {
+    ["rbxassetid://109744655458082"] = true,
+    ["rbxassetid://113088324958896"] = true,
+    ["rbxassetid://91506202951715"] = true,
+}
+
+local function stopTackleWatch()
+    for _, c in ipairs(TackleWatch.Conns) do pcall(function() c:Disconnect() end) end
+    table.clear(TackleWatch.Conns)
+    table.clear(TackleWatch.Watching)
+end
+
+local function watchPlayerForTackle(plr)
+    if plr == LocalPlayer then return end
+    if TackleWatch.Watching[plr] then return end
+    TackleWatch.Watching[plr] = true
+    local function bind(ch)
+        local hum = ch:WaitForChild("Humanoid", 6)
+        if not hum then return end
+        local animator = hum:FindFirstChildOfClass("Animator") or hum:WaitForChild("Animator", 4)
+        if not animator then return end
+        local conn = animator.AnimationPlayed:Connect(function(track)
+            if not TackleWatch.Enabled then return end
+            if not track or not track.Animation then return end
+            if not TackleAnimIds[track.Animation.AnimationId] then return end
+            local r = myRoot()
+            local tr = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+            if not (r and tr) then return end
+            local d = (r.Position - tr.Position).Magnitude
+            if d > TackleWatch.Range then return end
+            local now = os.clock()
+            if now - TackleWatch.Last < TackleWatch.Cooldown then return end
+            TackleWatch.Last = now
+            if TackleWatch.Method == "Key" then
+                pcall(function()
+                    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                end)
+                task.delay(0.05, function()
+                    pcall(function()
+                        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                    end)
+                end)
+            else
+                useMove("drib")
+            end
+        end)
+        table.insert(TackleWatch.Conns, conn)
+    end
+    if plr.Character then bind(plr.Character) end
+    table.insert(TackleWatch.Conns, plr.CharacterAdded:Connect(bind))
+end
+
+local function startTackleWatch()
+    if TackleWatch.Enabled then return end
+    TackleWatch.Enabled = true
+    for _, p in ipairs(Players:GetPlayers()) do watchPlayerForTackle(p) end
+    table.insert(TackleWatch.Conns, Players.PlayerAdded:Connect(watchPlayerForTackle))
+end
+
+local function setTackleWatch(on)
+    if on then startTackleWatch() else TackleWatch.Enabled = false stopTackleWatch() end
+end
 
 local ActiveDashes = {}
 local renderConn
@@ -1551,7 +1677,7 @@ local LINEUPS = {
         {base="B", pad=Vector3.new(-56,-9,135),  target=Vector3.new(-28,10,14)},
         {base="B", pad=Vector3.new(21,-9,161),   target=Vector3.new(-40,-6,13)},
         {base="B", pad=Vector3.new(-107,-9,113), target=Vector3.new(-89,-9,90)},
-        {base="B", pad=Vector3.new(-133,-9,102), target=Vector3.new(-27,0,15)},
+        {base="B", pad=Vector3.new(-133,-9,-102), target=Vector3.new(-27,0,15)},
         {base="B", pad=Vector3.new(-78,-9,128),  target=Vector3.new(-27,9,17)},
         {base="B", pad=Vector3.new(50,-9,135),   target=Vector3.new(-44,-3,13)},
         {base="A", pad=Vector3.new(-62,-9,-121), target=Vector3.new(29,-9,-38)},
@@ -1799,6 +1925,7 @@ local function restoreAll()
     qteEnabled = Persist.AutoQTE
     autoAct.toggle = Persist.AutoMove
     disconnectEnabled = Persist.AutoKick
+    TackleWatch.Method = Persist.TackleWatchMethod or "Move"
     applyReach()
     if Persist.AutoGoal then startAutoGoal() end
     if Persist.GoalFarm then startGoalFarm() end
@@ -1808,6 +1935,7 @@ local function restoreAll()
     if Persist.StealBallAiku then setSteal(true, "skill2") end
     if Persist.AutoFormless then setFormless(true) end
     if Persist.AirDribble then setAir(true) end
+    if Persist.TackleWatch then setTackleWatch(true) end
     applyTeamHighlight()
     if Persist.AutoGK then
         task.wait(1.5)
@@ -1819,104 +1947,112 @@ local function buildUI()
     local UI = TeekUI.new({ Title = "Azure Hub", Subtitle = "AZURE LATCH", Version = "v1" })
 
     local sh = UI:Tab("Shooting")
-    sh:Section("Shot Aimbot")
     sh:Toggle("Shot Aimbot", Config.Aimbot, function(v) Config.Aimbot = v end)
-    sh:Label("Shoot like normal - the shot goes at the enemy goal wherever you're facing.")
     sh:Dropdown("Aim Spot", { "Away From Keeper", "Left Corner", "Right Corner", "Center" }, Config.AimSpot, function(v) Config.AimSpot = v end)
     sh:Slider("Shot Height", 0, 45, Config.AimHeight, function(v) Config.AimHeight = v end)
     sh:Slider("Shot Power", 1, 10, Config.ShotPower, function(v) Config.ShotPower = v end)
-    sh:Label("1 = normal, 10 = really fast.")
-    sh:Toggle("Full Power (overrides slider)", Config.FullPower, function(v) Config.FullPower = v end)
+    sh:Toggle("Full Power", Config.FullPower, function(v) Config.FullPower = v end)
     sh:Toggle("No Curve", Config.NoCurve, function(v) Config.NoCurve = v end)
     sh:Toggle("Auto Shoot", Persist.AutoShoot, function(v) Persist.AutoShoot = v Config.AutoShoot = v end)
     sh:Slider("Shoot Range", 30, 150, Config.ShootRange, function(v) Config.ShootRange = v end)
-    sh:Section("Session")
     local sShots = sh:Stat("Aimed Shots", "0")
 
     local bl = UI:Tab("Ball")
-    bl:Section("Ball")
-    bl:Toggle("Ball Reach", Persist.Reach, function(v) Persist.Reach = v Config.Reach = v end)
-    bl:Slider("Reach", 7, 25, Config.ReachSize, function(v) Config.ReachSize = v end)
-    bl:Section("Auto")
+    bl:Toggle("Ball Reach", Persist.Reach, function(v)
+        Persist.Reach = v
+        Config.Reach = v
+        applyReach()
+    end)
+    bl:Slider("Player Reach", 7, 25, Config.ReachSize, function(v)
+        Config.ReachSize = v
+        PlayerReachTarget = v
+        applyReach()
+    end)
+    bl:Slider("GK Reach", 7, 25, Config.ReachSize, function(v)
+        Config.GKReachSize = v
+        GKReachTarget = v
+        applyReach()
+    end)
     bl:Toggle("Auto Tackle", Persist.AutoTackle, function(v) Persist.AutoTackle = v Config.AutoTackle = v end)
     bl:Slider("Tackle Range", 4, 20, Config.TackleRange, function(v) Config.TackleRange = v end)
     bl:Toggle("Auto Dribble", Persist.AutoDribble, function(v) Persist.AutoDribble = v Config.AutoDribble = v end)
     bl:Slider("Dribble Range", 4, 20, Config.DribbleRange, function(v) Config.DribbleRange = v end)
+    bl:Toggle("Counter Dribble", Persist.TackleWatch, function(v)
+        Persist.TackleWatch = v
+        setTackleWatch(v)
+    end)
+    bl:Slider("Counter Range", 1, 10, 8, function(v) TackleWatch.Range = v end)
+    bl:Dropdown("Counter Method", { "Move", "Key" }, "Move", function(v)
+        TackleWatch.Method = v
+        Persist.TackleWatchMethod = v
+    end)
     bl:Toggle("Auto Pass", Persist.AutoPass, function(v) Persist.AutoPass = v Config.AutoPass = v end)
     bl:Slider("Pass Power", 29, 95, Config.PassPower, function(v) Config.PassPower = v end)
-    bl:Section("Extras")
     bl:Toggle("Steal Ball", Persist.StealBall, function(v) Persist.StealBall = v setSteal(v, "tackle") end)
     bl:Toggle("Steal Ball (Aiku)", Persist.StealBallAiku, function(v) Persist.StealBallAiku = v setSteal(v, "skill2") end)
     bl:Toggle("Auto Goal", Persist.AutoGoal, function(v) Persist.AutoGoal = v if v then startAutoGoal() else stopAutoGoal() end end)
     bl:Toggle("Goal Farm", Persist.GoalFarm, function(v) Persist.GoalFarm = v if v then startGoalFarm() else stopGoalFarm() end end)
     bl:Dropdown("Farm Mode", {"Solo Farm", "Alt Farm (FAST)"}, "Solo Farm", function(v) goalFarm.mode = v end)
-    bl:Textbox("Farm Target", "Stop at this goals count.", function(t)
+    bl:Textbox("Farm Target", "", function(t)
         local n = tonumber(t)
         goalFarm.stopAt = n or nil
     end)
-    bl:Button("Break Ball", "Teleport extremely high.", breakBallPlayer)
-    bl:Button("Break Ball (Alt)", "Teleport + Space.", breakBallBall)
-    bl:Button("Break Ball (Permanent)", "Void the character.", permBreakBall)
-    bl:Button("Clear Dupe Balls", "Remove loose duplicate Ball MeshParts.", function()
+    bl:Button("Break Ball", "", breakBallPlayer)
+    bl:Button("Break Ball (Alt)", "", breakBallBall)
+    bl:Button("Break Ball (Permanent)", "", permBreakBall)
+    bl:Button("Clear Dupe Balls", "", function()
         for _, obj in ipairs(Workspace.Terrain:GetDescendants()) do
             if obj:IsA("MeshPart") and obj.Name == "Ball" then obj:Destroy() end
         end
     end)
 
     local gk = UI:Tab("Goalkeeper")
-    gk:Section("Auto Save")
     gk:Toggle("Auto Save", Persist.AutoGK, function(v)
         Persist.AutoGK = v
         if v then startAutoGK() else stopAutoGK() end
     end)
-    gk:Button("GK Anywhere", "hookfunction checkGK. Rejoin to disable.", gkAnywhere)
-    gk:Section("Collision")
+    gk:Button("GK Anywhere", "Rejoin to disable.", gkAnywhere)
     gk:Toggle("No Goal Walls", Persist.NoGoalWalls, function(v)
         Persist.NoGoalWalls = v
         Config.BlatantMode = v
         if v then startBlatant() else stopBlatant() end
     end)
-    gk:Section("Magnet")
     gk:Toggle("GK Magnet", Persist.GKMagnet, function(v)
         Persist.GKMagnet = v
         if v then startGKMagnet() else stopGKMagnet() end
     end)
-    gk:Slider("GK Magnet Range", 5, 60, 35, function(v) gkMagnetState.range = v end)
+    gk:Slider("GK Magnet Range", 5, 60, 35, function(v)
+        gkMagnetState.range = v
+        gkMagnetState.lastFire = 0
+    end)
 
     local vs = UI:Tab("Visuals")
-    vs:Section("ESP")
     vs:Toggle("Ball ESP", Persist.BallESP, function(v) Persist.BallESP = v Config.BallESP = v end)
     vs:Toggle("Team Highlight", Persist.TeamHighlight, function(v) Persist.TeamHighlight = v Config.TeamHighlight = v applyTeamHighlight() end)
 
     local bt = UI:Tab("Blatant")
-    bt:Section("Kick")
     bt:Toggle("Max Power Kick", Persist.MaxPowerKick, function(v)
         Persist.MaxPowerKick = v
         Config.MaxPowerKick = v
         kickHard = v
         if v then installKickHook() end
     end)
-    bt:Section("QTE")
     bt:Toggle("Auto QTE", Persist.AutoQTE, function(v) Persist.AutoQTE = v qteEnabled = v end)
-    bt:Section("Formless")
     bt:Toggle("Auto Formless", Persist.AutoFormless, function(v) Persist.AutoFormless = v Config.AutoFormless = v setFormless(v) end)
-    bt:Textbox("Formless Key", "e.g. Y, V, L.", function(t)
+    bt:Textbox("Formless Key", "", function(t)
         local ok, kc = pcall(function() return Enum.KeyCode[t:gsub("%s+","")] end)
         if ok and kc then formlessBind = kc end
     end)
-    bt:Section("Air Dribble")
     bt:Toggle("Air Dribble", Persist.AirDribble, function(v) Persist.AirDribble = v Config.AirDribble = v setAir(v) end)
-    bt:Textbox("Air Dribble Key", "e.g. E, Q, LeftAlt.", function(t)
+    bt:Textbox("Air Dribble Key", "", function(t)
         local ok, kc = pcall(function() return Enum.KeyCode[t:gsub("%s+","")] end)
         if ok and kc then airBind = kc end
     end)
 
     local bf = UI:Tab("Move Buffs")
-    bf:Section("Basics")
     bf:Slider("Tackle", 0, 75, 0, function(v) Distances.tackleDist = v end)
     bf:Slider("Rush", 0, 75, 0, function(v) Distances.rushDist = v end)
     bf:Slider("GK Dive", 0, 75, 0, function(v) Distances.gkDist = v end)
-    bf:Section("Characters")
     for _, entry in ipairs({
         {"Naruhaya","naruhayaDist",200},
         {"Raumdeuter","raumDist",200},
@@ -1954,19 +2090,17 @@ local function buildUI()
     end
 
     local au = UI:Tab("Auto")
-    au:Section("Auto Move")
-    au:Toggle("Auto Move", "Fires a skill when ball is close.", function(v)
+    au:Toggle("Auto Move", "", function(v)
         Persist.AutoMove = v
         autoAct.toggle = v
     end)
-    au:Textbox("Move #", "1-5.", function(t)
+    au:Textbox("Move #", "", function(t)
         local n = tonumber(t)
         if n and n >= 1 and n <= 5 then autoAct.move = n end
     end)
     au:Slider("Move Range", 3, 70, 10, function(v) autoAct.distance = v end)
     au:Slider("Ball Height", 0, 50, 0, function(v) autoAct.minHeight = v end)
     au:Dropdown("Move Mode", {"Hold", "Toggle"}, "Hold", function(v) autoAct.mode = v end)
-    au:Section("Line Up")
     au:Dropdown("Lineup Mode", {"Freeze", "Slowness"}, "Freeze", function(v)
         currentLineupMode = v
         resetLineupPhysics()
@@ -1977,12 +2111,11 @@ local function buildUI()
     au:Toggle("Karasu Lines", function(s) clearAllPads() if s then loadLineUps(LINEUPS.Karasu) end end)
     au:Toggle("Rin Lines", function(s) clearAllPads() if s then loadLineUps(LINEUPS.Rin) end end)
     au:Toggle("Rin Flow Lines", function(s) clearAllPads() if s then loadLineUps(LINEUPS.RinFlow) end end)
-    au:Button("Copy Line", "Copy a lineup from your current position.", copyLineupCode)
-    au:Textbox("Load Line", "Paste one or more codes.", function(t) loadLineupCodes(t) end)
+    au:Button("Copy Line", "", copyLineupCode)
+    au:Textbox("Load Line", "", function(t) loadLineupCodes(t) end)
 
     local ms = UI:Tab("Misc")
-    ms:Section("Codes")
-    ms:Button("Redeem Codes", true, function() task.spawn(function()
+    ms:Button("Redeem Codes", "", function() task.spawn(function()
         local CODES = { "TIMOTHYISHEREFORNAGI", "KAISERISNEXTWEEKNOWORRIES", "MAYBE", "BAROUTSPECIAL", "BROTHERNOAH", "MYANIMEFANSMAN" }
         if not (packets and packets.bytenet_useCode) then return end
         for _, c in ipairs(CODES) do
@@ -1991,8 +2124,6 @@ local function buildUI()
             task.wait(3.2)
         end
     end) end)
-    ms:Label("Join group 35316274 first.")
-    ms:Section("Dubs")
     ms:Toggle("All Dubs", Persist.AllDubs, function(v)
         Persist.AllDubs = v
         local st = LocalPlayer:FindFirstChild("setting")
@@ -2007,7 +2138,6 @@ local function buildUI()
             if b and b:IsA("BoolValue") then b.Value = v end
         end
     end)
-    ms:Section("Cutscene")
     ms:Toggle("No Cutscene", Config.NoCutscene, function(v)
         Config.NoCutscene = v
         local tempFolder = SoundService:FindFirstChild("azuretemp") or Instance.new("Folder", SoundService)
@@ -2023,15 +2153,13 @@ local function buildUI()
             if stored then stored.Parent = SoundService stored:Play() end
         end
     end)
-    ms:Section("Server")
-    ms:Button("Private Server", "Teleport to 11v11 private place.", function()
+    ms:Button("Private Server", "", function()
         pcall(function() TeleportService:Teleport(85946466968831, LocalPlayer) end)
     end)
-    ms:Textbox("Kick At #", "Kick when players exceed this.", function(t)
+    ms:Textbox("Kick At #", "", function(t)
         disconnectLimit = tonumber(t)
     end)
     ms:Toggle("Auto Kick", Persist.AutoKick, function(v) Persist.AutoKick = v disconnectEnabled = v end)
-    ms:Section("Emotes")
     ms:Toggle("Toosie", false, function(v)
         if v then playEmote("rbxassetid://95959941666543", "rbxassetid://1845341094", {}, true)
         else stopEmote() end
@@ -2072,12 +2200,10 @@ local function buildUI()
         nextS()
     end)
     ms:Button("Spit", function() playEmote("rbxassetid://97257010665720", "rbxassetid://18111052648", { Volume = 2 }, false) end)
-    ms:Section("External")
     ms:Button("IY", function()
         pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source"))() end)
     end)
-    ms:Section("Mobile Buttons")
-    ms:Button("Make Key Button", "Uses the key from the field below.", function()
+    ms:Button("Make Key Button", "", function()
         local key = (getgenv().AzureMobileKey or "")
         if key == "" then return end
         local sg = Instance.new("ScreenGui")
@@ -2121,7 +2247,7 @@ local function buildUI()
             end
         end)
     end)
-    ms:Textbox("Key", "e.g. LeftAlt.", function(t)
+    ms:Textbox("Key", "", function(t)
         getgenv().AzureMobileKey = t:gsub("%s+","")
     end)
     ms:Button("Formless Button", function()
@@ -2209,7 +2335,7 @@ pcall(function() getgenv().AzureDebug = {
     Config = Config, Aim = Aim, Auto = Auto, client = client, aimPoint = aimPoint,
     kickNow = kickNow, buffers = buffers, pick = pick, Distances = Distances,
     goalFarm = goalFarm, autoGkState = autoGkState, shotPowerValue = shotPowerValue,
-    gkMagnetState = gkMagnetState, Persist = Persist,
+    gkMagnetState = gkMagnetState, Persist = Persist, TackleWatch = TackleWatch,
 } end)
 
 print("[AzureHub] Azure Latch loaded")
@@ -2228,6 +2354,10 @@ _G.AzureHubUnload = function()
     stopGoalFarm()
     setFormless(false)
     setAir(false)
+    setTackleWatch(false)
+    TackleWatch.Method = "Move"
+    pcall(function() VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
+    pcall(function() VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
     for _, c in CONNS do pcall(function() c:Disconnect() end) end
     table.clear(CONNS)
     cleanTeamHighlight()
