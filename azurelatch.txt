@@ -1,4 +1,5 @@
---@INCLUDE WindUI
+--@INCLUDE UILib
+--@INCLUDE TempoUI
 --@INCLUDE TeekOps
 --@INCLUDE TeekConfig
 
@@ -41,8 +42,6 @@ local Persist = {
     AutoShoot = false,
     MaxPowerKick = false,
     AutoQTE = false,
-    AutoGKJump = true,
-    AutoDribbleOnSteal = true,
 }
 
 local Config = {
@@ -58,150 +57,17 @@ local Config = {
     BlatantMode = false, MaxPowerKick = false,
     AutoStealBall = false, AutoStealAiku = false, AutoFormless = false, AirDribble = false,
     AutoGoal = false, GoalFarm = false,
-    AutoGKJump = true,
-    AutoDribbleOnSteal = true,
-    AutoDribbleRange = 20,
 }
 
-local cloneref = cloneref or clonereference or function(i) return i end
-local WindUI
-do
-    local ok, result = pcall(function() return require("./src/Init") end)
-    if ok then
-        WindUI = result
-    else
-        if cloneref(game:GetService("RunService")):IsStudio() then
-            WindUI = require(cloneref(ReplicatedStorage:WaitForChild("WindUI"):WaitForChild("Init")))
-        else
-            WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
-        end
-    end
-end
-if not WindUI then error("[AzureHub] WindUI failed to load.") end
-
+-- ============================================================
+--  Azure Latch                    universe 6945584306 / place 94647229517154
+--  FREE hub (TeekHub repo, Games/AzureLatch.lua)
+--
+--  The dev's rewrite (10-11), moved onto TempoUI: his menu was written
+--  against a WindUI shim with the same calls, so buildUI is his, unchanged,
+--  and devTab below maps the two call shapes TempoUI spells differently.
+-- ============================================================
 local function noop() end
-
-local ShimSection = {}
-ShimSection.__index = ShimSection
-function ShimSection.new(parent) return setmetatable({ _p = parent }, ShimSection) end
-function ShimSection:Section(name)
-    if self._p.Section then pcall(self._p.Section, self._p, { Title = name, Box = true, BoxBorder = true, Opened = true }) end
-    return self
-end
-function ShimSection:Label(text)
-    if self._p.Section then pcall(self._p.Section, self._p, { Title = tostring(text), TextSize = 14 }) end
-    return self
-end
-function ShimSection:Toggle(name, default, cb)
-    local created
-    if self._p.Toggle then
-        created = self._p:Toggle({ Title = name, Value = default and true or false, Callback = cb or noop })
-    end
-    return created or self
-end
-function ShimSection:Slider(name, min, max, default, cb, suffix)
-    if self._p.Slider then
-        self._p:Slider({ Title = name, Step = 1, Value = { Min = min, Max = max, Default = default }, Callback = cb or noop })
-    end
-    return self
-end
-function ShimSection:Dropdown(name, list, default, cb)
-    if self._p.Dropdown then
-        self._p:Dropdown({ Title = name, Values = list, Value = default, Callback = cb or noop })
-    end
-    return self
-end
-function ShimSection:Button(name, arg2, arg3)
-    local cb = arg3 or arg2
-    if type(arg2) == "function" then cb = arg2 end
-    if self._p.Button then
-        self._p:Button({ Title = name, Justify = "Center", Callback = cb or noop })
-    end
-    return self
-end
-function ShimSection:Textbox(name, placeholder, cb)
-    if self._p.Input then
-        self._p:Input({ Title = name, Placeholder = placeholder, Value = "", Callback = cb or noop })
-    end
-    return self
-end
-function ShimSection:Stat(name, default)
-    local value = default or "0"
-    local obj = {}
-    if self._p.Section then
-        local lbl = self._p:Section({ Title = name .. ": " .. value, TextSize = 14 })
-        function obj.Set(v)
-            value = tostring(v)
-            if lbl and lbl.SetTitle then pcall(lbl.SetTitle, lbl, name .. ": " .. value) end
-        end
-    else
-        function obj.Set(v) value = tostring(v) end
-    end
-    return obj
-end
-
-local ShimTab = {}
-ShimTab.__index = ShimTab
-function ShimTab.new(parent) return setmetatable({ _p = parent }, ShimTab) end
-function ShimTab:Section(name)
-    local child
-    if self._p.Section then child = self._p:Section({ Title = name, Box = true, BoxBorder = true, Opened = true })
-    else child = self._p end
-    return ShimSection.new(child or self._p)
-end
-function ShimTab:Label(t) return ShimSection.new(self._p):Label(t) end
-function ShimTab:Toggle(n, d, cb) return ShimSection.new(self._p):Toggle(n, d, cb) end
-function ShimTab:Slider(n, a, b, c, cb, s) return ShimSection.new(self._p):Slider(n, a, b, c, cb, s) end
-function ShimTab:Dropdown(n, l, d, cb) return ShimSection.new(self._p):Dropdown(n, l, d, cb) end
-function ShimTab:Button(n, a, b) return ShimSection.new(self._p):Button(n, a, b) end
-function ShimTab:Textbox(n, p, cb) return ShimSection.new(self._p):Textbox(n, p, cb) end
-function ShimTab:Stat(n, d) return ShimSection.new(self._p):Stat(n, d) end
-
-local TeekUI = {}
-TeekUI.__index = TeekUI
-
-function TeekUI.new(opts)
-    local window = WindUI:CreateWindow({
-        Title = opts.Title or "Azure Hub",
-        Folder = "azurehub",
-        Icon = "bird",
-        NewElements = true,
-        OpenButton = {
-            Title = "Open Azure Hub",
-            CornerRadius = UDim.new(1, 0),
-            StrokeThickness = 3,
-            Enabled = true,
-            Draggable = true,
-            OnlyMobile = false,
-            Scale = 0.5,
-        },
-        Topbar = { Height = 44, ButtonsType = "Mac" },
-    })
-    return setmetatable({ _w = window, _tabs = {} }, TeekUI)
-end
-
-function TeekUI:Tab(name, kind)
-    local child = self._w:Tab({ Title = name, Icon = "bird" })
-    local t = ShimTab.new(child)
-    self._tabs[name] = t
-    return t
-end
-
-function TeekUI:Notify(text, kind, duration)
-    pcall(function()
-        WindUI:Notify({ Title = "Azure Hub", Content = tostring(text), Duration = duration or 3 })
-    end)
-end
-
-function TeekUI:mountInterface(tab, theme) return tab end
-function TeekUI:Boot(lines)
-    pcall(function()
-        WindUI:Notify({ Title = "Azure Hub", Content = "Loaded.", Duration = 3 })
-    end)
-end
-function TeekUI:Destroy()
-    if self._w and self._w.Destroy then pcall(self._w.Destroy, self._w) end
-end
 
 TeekConfig = TeekConfig or {
     Theme = nil,
@@ -261,28 +127,26 @@ end
 local buffers = _G.AzureBuffers or {}
 local pick    = _G.AzurePick
 
+-- The two packet ids the raw sends need, read out of the game's own byteNet
+-- table. (The rewrite fetched a pastebin script to do exactly this; whoever
+-- owns that paste could have swapped it for anything, so it lives here.)
 if not next(buffers) then
-    local ok = pcall(function()
-        loadstring(game:HttpGet("https://pastebin.com/raw/8XJh7dzh"))()
+    pcall(function()
+        local info = ReplicatedStorage:WaitForChild("BytenetStorage", 8):WaitForChild("Networking", 8).Value
+        local use = tonumber(info:match('"bytenet_use"%s*:%s*(%d+)'))
+        local find = tonumber(info:match('"bytenet_findBall"%s*:%s*(%d+)'))
+        if use then buffers.base = string.char(use) .. string.char(1) end
+        if find then buffers.grabball = string.char(find) end
     end)
-    if ok then
-        local t0 = os.clock()
-        repeat task.wait() until game.Lighting:FindFirstChild("BUFFERSTRINGS") or os.clock() - t0 > 8
-        local folder = game.Lighting:FindFirstChild("BUFFERSTRINGS")
-        if folder then
-            for _, v in ipairs(folder:GetChildren()) do buffers[v.Name] = v.Value end
-            folder:Destroy()
-        end
-    end
     _G.AzureBuffers = buffers
 end
 
 if not pick then
     local ok, role = pcall(function()
-        return ReplicatedStorage:WaitForChild("BytenetStorage"):WaitForChild("Networking").Value
-            :match('"bytenet_selectRole"%s*:%s*(%d+)')
+        return string.char(tonumber(ReplicatedStorage:WaitForChild("BytenetStorage", 8):WaitForChild("Networking", 8).Value
+            :match('"bytenet_selectRole"%s*:%s*(%d+)')))
     end)
-    if ok and role then pick = string.char(tonumber(role)) end
+    if ok then pick = role end
     _G.AzurePick = pick
 end
 
@@ -558,15 +422,11 @@ local function stopAutoGoal()
     if autoGoalState.conn then autoGoalState.conn:Disconnect() autoGoalState.conn = nil end
 end
 
--- =========================================================
--- AutoGK: Space-only jump via VirtualInputManager, ultra-fast shots, high-ping robust
--- =========================================================
-local autoGkState = { enabled = false, connections = {}, look = nil, pause = false, lastHolder = nil, gui = nil, lastJump = 0, lastTackle = 0, lastSpace = 0, lagBurst = false }
+local autoGkState = { enabled = false, connections = {}, look = nil, pause = false, lastHolder = nil, gui = nil, lastJump = 0, lastTackle = 0, lagBurst = false }
 local function stopAutoGK()
     autoGkState.enabled = false
     autoGkState.lastJump = 0
     autoGkState.lastTackle = 0
-    autoGkState.lastSpace = 0
     autoGkState.lagBurst = false
     for _, c in ipairs(autoGkState.connections) do pcall(function() c:Disconnect() end) end
     table.clear(autoGkState.connections)
@@ -583,7 +443,6 @@ local function startAutoGK()
     autoGkState.lastHolder = nil
     autoGkState.lastJump = 0
     autoGkState.lastTackle = 0
-    autoGkState.lastSpace = 0
     autoGkState.lagBurst = false
 
     autoGkState.gui = Instance.new("ScreenGui")
@@ -601,7 +460,7 @@ local function startAutoGK()
     autoGkState.look.Name = "AutoGKLook"
     autoGkState.look.Mode = Enum.OrientationAlignmentMode.OneAttachment
     autoGkState.look.Attachment0 = hrp:WaitForChild("RootAttachment")
-    autoGkState.look.Responsiveness = 5000
+    autoGkState.look.Responsiveness = 1800
     autoGkState.look.MaxTorque = math.huge
     autoGkState.look.Enabled = false
     autoGkState.look.Parent = hrp
@@ -614,7 +473,6 @@ local function startAutoGK()
     local lastBallPos = nil
     local GRAVITY = Vector3.new(0, -Workspace.Gravity, 0)
     local magnetBurstActive = false
-    local tackleBurstUntil = 0
 
     local function getBall()
         local b = Workspace.Terrain:FindFirstChild("Ball")
@@ -643,16 +501,6 @@ local function startAutoGK()
         return (t1 > 0 and t1) or (t2 > 0 and t2)
     end
 
-    local function pressSpace(force)
-        local now = os.clock()
-        if not force and now - (autoGkState.lastSpace or 0) < 0.02 then return end
-        autoGkState.lastSpace = now
-        pcall(function()
-            VirtualInputManager:SendKeyEvent(true,  Enum.KeyCode.Space, false, game)
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
-        end)
-    end
-
     table.insert(autoGkState.connections, ballHolder.Changed:Connect(function(cur)
         if autoGkState.lastHolder == char and cur == nil then
             autoGkState.pause = true
@@ -677,196 +525,170 @@ local function startAutoGK()
             return
         end
         local ball = getBall()
-
         if currentHolder and currentHolder:FindFirstChild("HumanoidRootPart") then
             local hr = currentHolder.HumanoidRootPart
             if autoGkState.look then
                 autoGkState.look.Enabled = true
                 autoGkState.look.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(hr.Position.X, hrp.Position.Y, hr.Position.Z))
-                autoGkState.look.Responsiveness = 6000
             end
             if (hrp.Position - hr.Position).Magnitude <= 35 then
-                if Config.AutoGKJump then pressSpace(true) end
                 fireBase({{"tackle"}})
             end
-            return
-        end
+        elseif ball then
+            local rawVel = ball.AssemblyLinearVelocity
+            local speed = rawVel.Magnitude
+            local ping = 0
+            pcall(function() ping = LocalPlayer:GetNetworkPing() end)
+            local laggy = ping > 0.12 or dt > 0.05
+            local fastBall = speed > 90 or (laggy and speed > 60)
+            local midBall = speed > 45 or (laggy and speed > 30)
 
-        if not ball then
-            if autoGkState.look then autoGkState.look.Enabled = false end
-            return
-        end
-
-        local rawVel = ball.AssemblyLinearVelocity
-        local speed = rawVel.Magnitude
-        local ping = 0
-        pcall(function() ping = LocalPlayer:GetNetworkPing() end)
-        local laggy = ping > 0.10 or dt > 0.04
-        local veryLaggy = ping > 0.20 or dt > 0.08
-        local fastBall = speed > 75 or (laggy and speed > 45)
-        local midBall  = speed > 35 or (laggy and speed > 22)
-
-        local nowPos = ball.Position
-        if lastBallPos then
-            local delta = (nowPos - lastBallPos).Magnitude
-            local jumpSpeed = delta / math.max(dt, 1/240)
-            if jumpSpeed > math.max(speed * 2.0, 150) then
-                velSmooth = rawVel
-                lastVel = rawVel
-            end
-        end
-        lastBallPos = nowPos
-
-        local alpha
-        if fastBall then alpha = 1
-        elseif midBall then alpha = 0.9
-        elseif veryLaggy then alpha = 0.5
-        else alpha = 0.25 end
-        velSmooth = velSmooth:Lerp(rawVel, math.clamp(alpha, 0, 1))
-        local accel
-        if veryLaggy then
-            accel = Vector3.zero
-        else
-            accel = (velSmooth - lastVel) / math.max(dt, 1/240)
-        end
-        lastVel = velSmooth
-
-        local team = teamOf(char)
-        local map = Workspace:FindFirstChild("map")
-        local goal = map and map:FindFirstChild(team == "A" and "Agoal" or "Bgoal")
-
-        local pingLead = math.clamp(ping, 0, 0.5)
-        local lead = fastBall and 0.10 or (midBall and 0.16 or 0.24)
-        lead = lead + pingLead
-
-        local tImpact = predictgoalimpact(ball.Position, velSmooth, accel, goal)
-        local predicted
-        if tImpact then
-            predicted = ball.Position + velSmooth * tImpact + 0.5 * accel * tImpact * tImpact
-        else
-            predicted = ball.Position + velSmooth * lead + 0.5 * GRAVITY * lead * lead
-        end
-
-        if autoGkState.look then
-            autoGkState.look.Enabled = true
-            autoGkState.look.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(predicted.X, hrp.Position.Y, predicted.Z))
-            autoGkState.look.Responsiveness = fastBall and 12000 or (midBall and 8000 or (veryLaggy and 4000 or 3000))
-        end
-
-        local hrpFlat = Vector3.new(hrp.Position.X, 0, hrp.Position.Z)
-        local ballFlat = Vector3.new(ball.Position.X, 0, ball.Position.Z)
-        local toMe = hrpFlat - ballFlat
-        local flatDist = toMe.Magnitude
-        local heightAbove = ball.Position.Y - (hrp.Position.Y - 2)
-        local rising = velSmooth.Y > 1
-        local velFlat = Vector3.new(velSmooth.X, 0, velSmooth.Z)
-        local closingSpeed = 0
-        if flatDist > 0.01 then
-            closingSpeed = velFlat:Dot(toMe.Unit)
-        end
-        local eta = closingSpeed > 0.5 and (flatDist / closingSpeed) or math.huge
-
-        local incoming = flatDist <= (fastBall and 95 or (midBall and 80 or 65)) + (laggy and 35 or 0)
-
-        if incoming and (heightAbove > 1.5 or rising) then
-            local bandLow  = veryLaggy and 0.5 or (laggy and 1.0 or 1.5)
-            local bandHigh = veryLaggy and 28 or (laggy and 22 or 18)
-            local inBand = heightAbove > bandLow and heightAbove < bandHigh
-            local ballAboveFeet = ball.Position.Y > hrp.Position.Y - 2
-            if inBand and ballAboveFeet then
-                local now2 = os.clock()
-                local cooldown = fastBall and 0.03 or (midBall and 0.05 or 0.08)
-                local rearm    = fastBall and 0.08 or (midBall and 0.12 or 0.16)
-                if now2 - (autoGkState.lastJump or 0) > cooldown then
-                    autoGkState.lastJump = now2
-                    task.spawn(function()
-                        local deadline = os.clock() + (fastBall and 0.18 or 0.28)
-                        repeat
-                            if Config.AutoGKJump then pressSpace(true) end
-                            task.wait(0.02)
-                            local s = hum:GetState()
-                            if s == Enum.HumanoidStateType.Jumping or s == Enum.HumanoidStateType.Freefall then
-                                return
-                            end
-                        until os.clock() > deadline
-                    end)
+            local nowPos = ball.Position
+            if lastBallPos then
+                local delta = (nowPos - lastBallPos).Magnitude
+                local jumpSpeed = delta / math.max(dt, 1/240)
+                if jumpSpeed > math.max(speed * 2.5, 200) then
+                    velSmooth = rawVel
+                    lastVel = rawVel
                 end
             end
-        end
+            lastBallPos = nowPos
 
-        local tackleByDist = fastBall and 65 or (midBall and 55 or 45)
-        if laggy then tackleByDist = tackleByDist + 25 end
-        if veryLaggy then tackleByDist = tackleByDist + 15 end
-        local tackleByTime = eta < (ping + 0.15)
-
-        local shouldTackle = flatDist <= tackleByDist
-            or (eta < 0.55 and closingSpeed > 18)
-            or tackleByTime
-            or (fastBall and flatDist <= tackleByDist + 20)
-
-        if shouldTackle then
-            local now3 = os.clock()
-            if not autoGkState.lastTackle or now3 - autoGkState.lastTackle > 0.015 then
-                autoGkState.lastTackle = now3
-                if Config.AutoGKJump then pressSpace(true) end
-                fireBase({{"tackle"}})
-                tackleBurstUntil = now3 + (fastBall and 0.35 or 0.25)
-            end
-            if now3 < tackleBurstUntil then
-                fireBase({{"tackle"}})
-                fireRaw(buffers.grabball)
-            end
-
+            local alpha = fastBall and 0.85 or (midBall and 0.6 or 0.22)
+            velSmooth = velSmooth:Lerp(rawVel, math.clamp(alpha, 0, 1))
+            local accel
             if laggy then
-                if not autoGkState.lagBurst then
-                    autoGkState.lagBurst = true
+                accel = Vector3.zero
+            else
+                accel = (velSmooth - lastVel) / math.max(dt, 1/240)
+            end
+            lastVel = velSmooth
+
+            local team = teamOf(char)
+            local map = Workspace:FindFirstChild("map")
+            local goal = map and map:FindFirstChild(team == "A" and "Agoal" or "Bgoal")
+
+            local lead = fastBall and 0.12 or (midBall and 0.2 or 0.3)
+            lead = lead + math.clamp(ping, 0, 0.4)
+            local tImpact = predictgoalimpact(ball.Position, velSmooth, accel, goal)
+            local predicted
+            if tImpact then
+                predicted = ball.Position + velSmooth * tImpact + 0.5 * accel * tImpact * tImpact
+            else
+                predicted = ball.Position + velSmooth * lead + 0.5 * GRAVITY * lead * lead
+            end
+
+            if autoGkState.look then
+                autoGkState.look.Enabled = true
+                autoGkState.look.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(predicted.X, hrp.Position.Y, predicted.Z))
+                autoGkState.look.Responsiveness = fastBall and 4000 or (laggy and 2500 or 1800)
+            end
+
+            local hrpFlat = Vector3.new(hrp.Position.X, 0, hrp.Position.Z)
+            local ballFlat = Vector3.new(ball.Position.X, 0, ball.Position.Z)
+            local toMe = hrpFlat - ballFlat
+            local flatDist = toMe.Magnitude
+            local heightAbove = ball.Position.Y - (hrp.Position.Y - 2)
+            local rising = velSmooth.Y > 1
+            local velFlat = Vector3.new(velSmooth.X, 0, velSmooth.Z)
+            local closingSpeed = 0
+            if flatDist > 0.01 then
+                closingSpeed = velFlat:Dot(toMe.Unit)
+            end
+            local eta = closingSpeed > 0.5 and (flatDist / closingSpeed) or math.huge
+
+            local incoming = flatDist <= (fastBall and 70 or (midBall and 62 or 55)) + (laggy and 20 or 0)
+
+            if incoming and (heightAbove > 2.5 or rising) then
+                local bandLow = laggy and 1.5 or 2.5
+                local bandHigh = laggy and 20 or 15
+                local inBand = heightAbove > bandLow and heightAbove < bandHigh
+                local ballAboveFeet = ball.Position.Y > hrp.Position.Y - 2
+                if inBand and ballAboveFeet then                    local now2 = os.clock()
+                    local hs = hum:GetState()
+                    local grounded = hs == Enum.HumanoidStateType.Running
+                        or hs == Enum.HumanoidStateType.RunningNoPhysics
+                        or hs == Enum.HumanoidStateType.Landed
+                        or hs == Enum.HumanoidStateType.Seated
+                    local cooldown = fastBall and 0.08 or (midBall and 0.12 or 0.15)
+                    local rearm = fastBall and 0.18 or 0.28
+                    local canJump = grounded or (now2 - (autoGkState.lastJump or 0) > rearm)
+                    if canJump and now2 - (autoGkState.lastJump or 0) > cooldown then
+                        hum.Jump = true
+                        autoGkState.lastJump = now2
+                        task.spawn(function()
+                            local deadline = os.clock() + (fastBall and 0.15 or 0.22)
+                            repeat
+                                task.wait()
+                                local s = hum:GetState()
+                                if s == Enum.HumanoidStateType.Jumping or s == Enum.HumanoidStateType.Freefall then
+                                    return
+                                end
+                                hum.Jump = true
+                            until os.clock() > deadline
+                        end)
+                    end
+                end
+            end
+
+            local tackleByDist = fastBall and 42 or (midBall and 38 or 35)
+            if laggy then tackleByDist = tackleByDist + 15 end
+            local tackleByTime = eta < (ping + 0.08)
+            if flatDist <= tackleByDist or (eta < 0.35 and closingSpeed > 30) or tackleByTime then
+                if not autoGkState.lastTackle or os.clock() - autoGkState.lastTackle > 0.03 then
+                    autoGkState.lastTackle = os.clock()
+                    fireBase({{"tackle"}})
+                end
+                if laggy then
+                    if not autoGkState.lagBurst then
+                        autoGkState.lagBurst = true
+                        task.spawn(function()
+                            while autoGkState.enabled and autoGkState.lagBurst do
+                                local p = 0
+                                pcall(function() p = LocalPlayer:GetNetworkPing() end)
+                                if p < 0.1 and flatDist > 55 then break end
+                                pcall(function()
+                                    local b2 = getBall()
+                                    local r2 = myRoot()
+                                    if not (b2 and r2) then return end
+                                    local d2 = (Vector3.new(r2.Position.X, 0, r2.Position.Z) - Vector3.new(b2.Position.X, 0, b2.Position.Z)).Magnitude
+                                    if d2 > 65 then autoGkState.lagBurst = false return end
+                                end)
+                                fireBase({{"tackle"}})
+                                fireRaw(buffers.grabball)
+                                task.wait(0.05)
+                            end
+                            autoGkState.lagBurst = false
+                        end)
+                    end
+                elseif not magnetBurstActive then
+                    magnetBurstActive = true
                     task.spawn(function()
-                        while autoGkState.enabled and autoGkState.lagBurst do
-                            local p = 0
-                            pcall(function() p = LocalPlayer:GetNetworkPing() end)
-                            if p < 0.08 and flatDist > 70 then break end
-                            pcall(function()
-                                local b2 = getBall()
-                                local r2 = myRoot()
-                                if not (b2 and r2) then return end
-                                local d2 = (Vector3.new(r2.Position.X, 0, r2.Position.Z) - Vector3.new(b2.Position.X, 0, b2.Position.Z)).Magnitude
-                                if d2 > 80 then autoGkState.lagBurst = false return end
-                            end)
-                            if Config.AutoGKJump then pressSpace(false) end
-                            fireBase({{"tackle"}})
+                        local burstInterval = fastBall and 0.06 or 0.125
+                        local burstDuration = fastBall and 0.6 or 0.897
+                        local start = os.clock()
+                        while os.clock() - start < burstDuration and autoGkState.enabled do
                             fireRaw(buffers.grabball)
-                            task.wait(0.02)
+                            task.wait(burstInterval)
                         end
-                        autoGkState.lagBurst = false
+                        magnetBurstActive = false
                     end)
                 end
-            elseif not magnetBurstActive then
+            end
+
+            if fastBall and flatDist <= 55 and not magnetBurstActive and not autoGkState.lagBurst then
                 magnetBurstActive = true
                 task.spawn(function()
-                    local burstInterval = fastBall and 0.025 or (midBall and 0.06 or 0.09)
-                    local burstDuration = fastBall and 0.7 or (midBall and 0.8 or 0.897)
                     local start = os.clock()
-                    while os.clock() - start < burstDuration and autoGkState.enabled do
-                        if Config.AutoGKJump then pressSpace(false) end
+                    while os.clock() - start < 0.4 and autoGkState.enabled do
                         fireRaw(buffers.grabball)
-                        task.wait(burstInterval)
+                        task.wait(0.05)
                     end
                     magnetBurstActive = false
                 end)
             end
-        end
-
-        if fastBall and flatDist <= 80 and not magnetBurstActive and not autoGkState.lagBurst then
-            magnetBurstActive = true
-            task.spawn(function()
-                local start = os.clock()
-                while os.clock() - start < 0.55 and autoGkState.enabled do
-                    if Config.AutoGKJump then pressSpace(false) end
-                    fireRaw(buffers.grabball)
-                    task.wait(0.02)
-                end
-                magnetBurstActive = false
-            end)
+        else
+            if autoGkState.look then autoGkState.look.Enabled = false end
         end
     end))
 
@@ -1022,16 +844,13 @@ local function checkQTE()
                         VirtualInputManager:SendKeyEvent(false, kc, false, game)
                     end
                 end
+                break
             end
-            break
         end
     end
 end
 track(RunService.RenderStepped:Connect(function() pcall(checkQTE) end))
 
--- =========================================================
--- Auto-Dribble on Steal: VirtualInputManager E, instantaneous fire
--- =========================================================
 local stealAnims = {
     "rbxassetid://123994829903056",
     "rbxassetid://73092083880817",
@@ -1043,12 +862,6 @@ local stealAnims = {
 local stealConns = {}
 local stealEnabled = false
 local stealSkill = "tackle"
-local AUTO_DRIBBLE_ON_STEAL = true
-local AUTO_DRIBBLE_RANGE = 20
-local AUTO_DRIBBLE_KEY = Enum.KeyCode.E
-local AUTO_DRIBBLE_COOLDOWN = 0.0   -- [PATCH] instantaneous; 0 = no throttle
-local lastAutoDribbleTrigger = 0
-
 local function stopSteal()
     for _, c in ipairs(stealConns) do pcall(function() c:Disconnect() end) end
     table.clear(stealConns)
@@ -1067,30 +880,11 @@ local function hookStealPlayer(plr)
             local hit = false
             for _, a in ipairs(stealAnims) do if id == a then hit = true break end end
             if not hit then return end
-
             local me = myChar()
             local r = myRoot()
             local tr = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
             if not (r and tr and me) then return end
-            if (r.Position - tr.Position).Magnitude > AUTO_DRIBBLE_RANGE then return end
-
-            if AUTO_DRIBBLE_ON_STEAL and Config.AutoDribbleOnSteal then
-                -- [PATCH] Instant: E via VirtualInputManager, then skill fire, then re-fire.
-                -- No tick() throttle, no wait. All three calls in the same frame.
-                if AUTO_DRIBBLE_COOLDOWN > 0 then
-                    local now = tick()
-                    if now - lastAutoDribbleTrigger < AUTO_DRIBBLE_COOLDOWN then return end
-                    lastAutoDribbleTrigger = now
-                end
-                pcall(function()
-                    VirtualInputManager:SendKeyEvent(true,  AUTO_DRIBBLE_KEY, false, game)
-                    VirtualInputManager:SendKeyEvent(false, AUTO_DRIBBLE_KEY, false, game)
-                end)
-                pcall(fireBase, {{stealSkill}})
-                pcall(fireBase, {{stealSkill}})
-                return
-            end
-
+            if (r.Position - tr.Position).Magnitude > 20 then return end
             local t0 = tick()
             local c
             c = RunService.RenderStepped:Connect(function()
@@ -1119,18 +913,6 @@ end
 local function setSteal(enabled, skill)
     stealSkill = skill or "tackle"
     if enabled then startSteal() else stealEnabled = false stopSteal() end
-end
-
-_G.AzureAutoDribble = _G.AzureAutoDribble or {}
-_G.AzureAutoDribble.range    = AUTO_DRIBBLE_RANGE
-_G.AzureAutoDribble.cooldown = AUTO_DRIBBLE_COOLDOWN
-_G.AzureAutoDribble.key      = AUTO_DRIBBLE_KEY
-_G.AzureAutoDribble.set = function(o)
-    o = o or {}
-    if o.range then AUTO_DRIBBLE_RANGE = tonumber(o.range) or AUTO_DRIBBLE_RANGE; _G.AzureAutoDribble.range = AUTO_DRIBBLE_RANGE end
-    if o.cooldown then AUTO_DRIBBLE_COOLDOWN = tonumber(o.cooldown) or 0; _G.AzureAutoDribble.cooldown = AUTO_DRIBBLE_COOLDOWN end
-    if o.key then AUTO_DRIBBLE_KEY = o.key; _G.AzureAutoDribble.key = AUTO_DRIBBLE_KEY end
-    if o.enabled ~= nil then Config.AutoDribbleOnSteal = o.enabled and true or false end
 end
 
 local formlessBind = Enum.KeyCode.Y
@@ -1882,8 +1664,6 @@ local function restoreAll()
     Config.AutoFormless = Persist.AutoFormless
     Config.AirDribble = Persist.AirDribble
     Config.AutoQTE = Persist.AutoQTE
-    Config.AutoGKJump = Persist.AutoGKJump
-    Config.AutoDribbleOnSteal = Persist.AutoDribbleOnSteal
     kickHard = Persist.MaxPowerKick
     qteEnabled = Persist.AutoQTE
     autoAct.toggle = Persist.AutoMove
@@ -1904,10 +1684,30 @@ local function restoreAll()
     end
 end
 
-local function buildUI()
-    local UI = TeekUI.new({ Title = "Azure Hub", Subtitle = "AZURE LATCH", Version = "v1" })
+-- Button(name, fn) / Button(name, "what it does", fn), Toggle(name, fn) /
+-- Toggle(name, "what it does", fn) and Textbox(name, hint, fn) are the dev's
+-- call shapes; TempoUI has Button(name, primary, fn), Toggle(name, on, fn), Input.
+local function devTab(t)
+    local button, toggle = t.Button, t.Toggle
+    function t:Toggle(name, a, b)
+        if type(a) == "function" then return toggle(self, name, false, a) end
+        local h = toggle(self, name, a == true, b)
+        if type(a) == "string" then self:Label(a) end
+        return h
+    end
+    function t:Button(name, a, b)
+        local h = button(self, name, a == true, type(a) == "function" and a or b)
+        if type(a) == "string" then self:Label(a) end
+        return h
+    end
+    function t:Textbox(name, hint, cb) return self:Input(name .. " - " .. tostring(hint or ""), nil, cb) end
+    return t
+end
 
-    local sh = UI:Tab("Shooting")
+local function buildUI()
+    local UI = TeekUI.new({ Title = "Tempo Hub", Subtitle = "AZURE LATCH", Version = "v2" })
+
+    local sh = devTab(UI:Tab("Shooting"))
     sh:Section("Shot Aimbot")
     sh:Toggle("Shot Aimbot", Config.Aimbot, function(v) Config.Aimbot = v end)
     sh:Label("Shoot like normal - the shot goes at the enemy goal wherever you're facing.")
@@ -1922,7 +1722,7 @@ local function buildUI()
     sh:Section("Session")
     local sShots = sh:Stat("Aimed Shots", "0")
 
-    local bl = UI:Tab("Ball")
+    local bl = devTab(UI:Tab("Ball"))
     bl:Section("Ball")
     bl:Toggle("Ball Reach", Persist.Reach, function(v) Persist.Reach = v Config.Reach = v end)
     bl:Slider("Reach", 7, 25, Config.ReachSize, function(v) Config.ReachSize = v end)
@@ -1936,16 +1736,6 @@ local function buildUI()
     bl:Section("Extras")
     bl:Toggle("Steal Ball", Persist.StealBall, function(v) Persist.StealBall = v setSteal(v, "tackle") end)
     bl:Toggle("Steal Ball (Aiku)", Persist.StealBallAiku, function(v) Persist.StealBallAiku = v setSteal(v, "skill2") end)
-    bl:Toggle("Auto Dribble on Steal (E)", Persist.AutoDribbleOnSteal, function(v)
-        Persist.AutoDribbleOnSteal = v
-        Config.AutoDribbleOnSteal = v
-        AUTO_DRIBBLE_ON_STEAL = v
-    end)
-    bl:Slider("Steal Dribble Range", 5, 60, AUTO_DRIBBLE_RANGE, function(v)
-        AUTO_DRIBBLE_RANGE = v
-        Config.AutoDribbleRange = v
-        _G.AzureAutoDribble.range = v
-    end)
     bl:Toggle("Auto Goal", Persist.AutoGoal, function(v) Persist.AutoGoal = v if v then startAutoGoal() else stopAutoGoal() end end)
     bl:Toggle("Goal Farm", Persist.GoalFarm, function(v) Persist.GoalFarm = v if v then startGoalFarm() else stopGoalFarm() end end)
     bl:Dropdown("Farm Mode", {"Solo Farm", "Alt Farm (FAST)"}, "Solo Farm", function(v) goalFarm.mode = v end)
@@ -1962,15 +1752,11 @@ local function buildUI()
         end
     end)
 
-    local gk = UI:Tab("Goalkeeper")
+    local gk = devTab(UI:Tab("Goalkeeper"))
     gk:Section("Auto Save")
     gk:Toggle("Auto Save", Persist.AutoGK, function(v)
         Persist.AutoGK = v
         if v then startAutoGK() else stopAutoGK() end
-    end)
-    gk:Toggle("Auto Jump (Space on high ball)", Persist.AutoGKJump, function(v)
-        Persist.AutoGKJump = v
-        Config.AutoGKJump = v
     end)
     gk:Button("GK Anywhere", "hookfunction checkGK. Rejoin to disable.", gkAnywhere)
     gk:Section("Collision")
@@ -1986,12 +1772,12 @@ local function buildUI()
     end)
     gk:Slider("GK Magnet Range", 5, 60, 35, function(v) gkMagnetState.range = v end)
 
-    local vs = UI:Tab("Visuals")
+    local vs = devTab(UI:Tab("Visuals"))
     vs:Section("ESP")
     vs:Toggle("Ball ESP", Persist.BallESP, function(v) Persist.BallESP = v Config.BallESP = v end)
     vs:Toggle("Team Highlight", Persist.TeamHighlight, function(v) Persist.TeamHighlight = v Config.TeamHighlight = v applyTeamHighlight() end)
 
-    local bt = UI:Tab("Blatant")
+    local bt = devTab(UI:Tab("Blatant"))
     bt:Section("Kick")
     bt:Toggle("Max Power Kick", Persist.MaxPowerKick, function(v)
         Persist.MaxPowerKick = v
@@ -2014,7 +1800,7 @@ local function buildUI()
         if ok and kc then airBind = kc end
     end)
 
-    local bf = UI:Tab("Move Buffs")
+    local bf = devTab(UI:Tab("Move Buffs"))
     bf:Section("Basics")
     bf:Slider("Tackle", 0, 75, 0, function(v) Distances.tackleDist = v end)
     bf:Slider("Rush", 0, 75, 0, function(v) Distances.rushDist = v end)
@@ -2056,7 +1842,7 @@ local function buildUI()
         bf:Slider(entry[1], 0, entry[3], 0, function(v) Distances[entry[2]] = v end)
     end
 
-    local au = UI:Tab("Auto")
+    local au = devTab(UI:Tab("Auto"))
     au:Section("Auto Move")
     au:Toggle("Auto Move", "Fires a skill when ball is close.", function(v)
         Persist.AutoMove = v
@@ -2083,7 +1869,7 @@ local function buildUI()
     au:Button("Copy Line", "Copy a lineup from your current position.", copyLineupCode)
     au:Textbox("Load Line", "Paste one or more codes.", function(t) loadLineupCodes(t) end)
 
-    local ms = UI:Tab("Misc")
+    local ms = devTab(UI:Tab("Misc"))
     ms:Section("Codes")
     ms:Button("Redeem Codes", true, function() task.spawn(function()
         local CODES = { "TIMOTHYISHEREFORNAGI", "KAISERISNEXTWEEKNOWORRIES", "MAYBE", "BAROUTSPECIAL", "BROTHERNOAH", "MYANIMEFANSMAN" }
@@ -2264,16 +2050,20 @@ local function buildUI()
         btn.Activated:Connect(function() pcall(airKick) end)
     end)
 
-    local tp = UI:Tab("Teleports")
+    local tp = devTab(UI:Tab("Teleports"))
     tp:Button("Midfield", function() local r = myRoot() if r then r.CFrame = CFrame.new(-540, 3, 1274) end end)
     tp:Button("Commentator", function() local r = myRoot() if r then r.CFrame = CFrame.new(-6, 2, 3237) end end)
     tp:Button("Goal A", function() local r = myRoot() if r then r.CFrame = CFrame.new(-537, 3, 1575) end end)
     tp:Button("Goal B", function() local r = myRoot() if r then r.CFrame = CFrame.new(-534, 3, 974) end end)
 
-    local hb = UI:Tab("Hub")
+    local hb = devTab(UI:Tab("Hub"))
     hb:Button("Unload", false, function()
         task.delay(0.3, function() if _G.AzureHubUnload then pcall(_G.AzureHubUnload) end end)
     end)
+
+    UI:mountInterface(UI:Tab("Interface", "sliders"), TeekConfig.Theme)
+    TeekOps.mountUI(UI:Tab("Status"), UI)
+    TeekConfig.mountUI(UI:Tab("Config"), UI)
 
     UI:Boot({ "reading the pitch", "ready" })
 
@@ -2302,21 +2092,23 @@ TeekOps.check("Buffers", TeekOps.RISK.CLIENT, function() return buffers.base ~= 
 TeekOps.check("Role", TeekOps.RISK.CLIENT, function() return pick ~= nil end)
 
 local gui = buildUI()
+pcall(TeekConfig.applyTheme, gui)
 
 track(LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1.5)
     pcall(restoreAll)
 end))
 
+-- DEV:BEGIN (stripped from the upload build)
 pcall(function() getgenv().AzureDebug = {
     Config = Config, Aim = Aim, Auto = Auto, client = client, aimPoint = aimPoint,
     kickNow = kickNow, buffers = buffers, pick = pick, Distances = Distances,
     goalFarm = goalFarm, autoGkState = autoGkState, shotPowerValue = shotPowerValue,
     gkMagnetState = gkMagnetState, Persist = Persist,
-    AutoDribble = _G.AzureAutoDribble,
 } end)
+-- DEV:END
 
-print("[AzureHub] Azure Latch loaded")
+print("[TeekHub] Azure Latch loaded")
 
 _G.AzureHubUnload = function()
     HubAlive = false
